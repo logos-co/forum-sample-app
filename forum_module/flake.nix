@@ -1,15 +1,8 @@
 {
-  description = "External Library Module — wraps a pre-built or vendored C/C++ library";
+  description = "Calculator module - wraps libcalc C library for Logos";
 
   inputs = {
-    logos-module-builder.url = "github:logos-co/logos-module-builder";
-
-    # If your external library is a flake input (source to be built by Nix),
-    # add it here and pass it via externalLibInputs below.
-    # example-lib = {
-    #   url = "github:example/example-lib";
-    #   flake = false;
-    # };
+    logos-module-builder.url = "github:logos-co/logos-module-builder/tutorial-v3";
   };
 
   outputs = inputs@{ logos-module-builder, ... }:
@@ -17,10 +10,5 @@
       src = ./.;
       configFile = ./metadata.json;
       flakeInputs = inputs;
-
-      # If using a flake-input external library (uncomment and adapt):
-      # externalLibInputs = {
-      #   example_lib = inputs.example-lib;
-      # };
     };
 }
