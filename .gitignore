@@ -4,3 +4,6 @@ result-*
 
 # CMake build directory
 build/
+
+# Clang cache files
+.cache/

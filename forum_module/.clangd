@@ -1,0 +1,2 @@
+CompileFlags:
+  Add: [-I/nix/store/dsagi0fbzhfgaas6rxndl6f6pciqdcak-logos-cpp-sdk/include]
