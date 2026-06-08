@@ -1,4 +1,5 @@
 #include "calc_module_impl.h"
+#define MODULE_VERSION "1.0.0"
 
 int64_t CalcModuleImpl::add(int64_t a, int64_t b) { return a + b; }
 
@@ -32,12 +33,12 @@ int64_t CalcModuleImpl::fibonacci(int64_t n) {
   return fib;
 }
 
-std::string CalcModuleImpl::libVersion() { return std::string("1.0.0"); }
+std::string CalcModuleImpl::libVersion() { return std::string(MODULE_VERSION); }
 
 void CalcModuleImpl::libVersionNotify() {
   // Emit the event declared in `logos_events:`. When the module is
   // loaded by a host, this reaches every subscriber. When the class
   // is constructed outside a host (e.g. in unit tests), it is a
   // safe no-op.
-  versionReady(std::string("1.0.0"));
+  versionReady(std::string(MODULE_VERSION));
 }
