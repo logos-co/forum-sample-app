@@ -10,13 +10,13 @@ else()
     message(FATAL_ERROR "LogosModule.cmake not found")
 endif()
 
-# Define the module with its external library dependency.
+# Define the module (with any external library dependencies) here.
 # Because metadata.json sets `interface: universal`, the builder runs
-# logos-cpp-generator over src/calc_module_impl.h before configuring,
+# logos-cpp-generator over src/forum_app_impl.h before configuring,
 # and LogosModule.cmake compiles the generated glue automatically.
 logos_module(
-    NAME calc_module
+    NAME forum_app
     SOURCES
-        src/calc_module_impl.h
-        src/calc_module_impl.cpp
+        src/forum_app_impl.h
+        src/forum_app_impl.cpp
 )

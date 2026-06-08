@@ -1,12 +1,14 @@
 {
-  "name": "calc_module",
+  "name": "forum_app",
   "version": "1.0.0",
   "type": "core",
   "category": "general",
-  "description": "Calculator module",
-  "main": "calc_module_plugin",
+  "description": "Forum App module",
+  "main": "forum_app_plugin",
   "interface": "universal",
-  "dependencies": [],
+  "dependencies": [
+    "forum_comms"
+  ],
   "nix": {
     "packages": {
       "build": [],
