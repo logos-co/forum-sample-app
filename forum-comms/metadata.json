@@ -1,10 +1,10 @@
 {
-  "name": "calc_module",
+  "name": "forum_comms",
   "version": "1.0.0",
   "type": "core",
-  "category": "general",
-  "description": "Calculator module",
-  "main": "calc_module_plugin",
+  "category": "example",
+  "description": "A minimal example Logos module",
+  "main": "forum_comms_plugin",
   "interface": "universal",
   "dependencies": [],
   "nix": {
@@ -12,6 +12,7 @@
       "build": [],
       "runtime": []
     },
+    "external_libraries": [],
     "cmake": {
       "find_packages": [],
       "extra_sources": [],

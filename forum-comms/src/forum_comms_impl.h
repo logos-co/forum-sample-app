@@ -5,10 +5,10 @@
 
 #include <logos_module_context.h> // LogosModuleContext base + `logos_events:`
 
-class CalcModuleImpl : public LogosModuleContext {
+class ForumCommsImpl : public LogosModuleContext {
 public:
-  CalcModuleImpl() = default;
-  ~CalcModuleImpl() = default;
+  ForumCommsImpl() = default;
+  ~ForumCommsImpl() = default;
 
   // ── Public API — every method here is callable over IPC ──────────
   // The generator maps C++ types onto the wire automatically:
