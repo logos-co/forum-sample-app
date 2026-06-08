@@ -1,0 +1,22 @@
+{
+  "name": "calc_module",
+  "version": "1.0.0",
+  "type": "core",
+  "category": "general",
+  "description": "Calculator module",
+  "main": "calc_module_plugin",
+  "interface": "universal",
+  "dependencies": [],
+  "nix": {
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}
