@@ -28,5 +28,9 @@ public:
   // calc_module_events.cpp) that routes the typed args to subscribers
   // via the host's `eventResponse` mechanism. QML subscribes with
   // logos.onModuleEvent("calc_module", "versionReady").
-  logos_events : void versionReady(const std::string &version);
+  //
+  // clang-format off
+logos_events:
+  void versionReady(const std::string &version);
+  // clang-format on
 };
