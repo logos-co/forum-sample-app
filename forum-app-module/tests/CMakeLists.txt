@@ -4,11 +4,11 @@ project(CalcModuleTests LANGUAGES CXX)
 include(LogosTest)
 
 logos_test(
-    NAME calc_module_tests
+    NAME forum_app_tests
     MODULE_SOURCES
-        ../src/calc_module_impl.cpp
-        mocks/calc_module_events_stub.cpp
+        ../src/forum_app_impl.cpp
+        mocks/forum_app_events_stub.cpp
     TEST_SOURCES
         main.cpp
-        test_calc.cpp
+        test_forum.cpp
 )

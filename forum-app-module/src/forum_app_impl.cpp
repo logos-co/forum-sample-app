@@ -1,4 +1,5 @@
 #include "forum_app_impl.h"
+#include "logos_sdk.h"
 #define MODULE_VERSION "1.0.0"
 
 int64_t ForumAppImpl::add(int64_t a, int64_t b) { return a + b; }
@@ -34,6 +35,10 @@ int64_t ForumAppImpl::fibonacci(int64_t n) {
 }
 
 std::string ForumAppImpl::libVersion() { return std::string(MODULE_VERSION); }
+
+std::string ForumAppImpl::getModuleInfo() {
+  return modules().forum_comms.libVersion();
+}
 
 void ForumAppImpl::libVersionNotify() {
   // Emit the event declared in `logos_events:`. When the module is

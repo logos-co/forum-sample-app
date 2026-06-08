@@ -6,7 +6,9 @@
   "description": "Forum App module",
   "main": "forum_app_plugin",
   "interface": "universal",
-  "dependencies": [],
+  "dependencies": [
+    "forum_comms"
+  ],
   "nix": {
     "packages": {
       "build": [],

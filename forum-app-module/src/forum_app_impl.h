@@ -18,6 +18,7 @@ public:
   int64_t factorial(int64_t n);
   int64_t fibonacci(int64_t n);
   std::string libVersion();
+  std::string getModuleInfo();
 
   // Fire-and-forget: looks up the version, then emits it as an event
   // instead of returning it. Used by the QML tutorial (Part 2).
