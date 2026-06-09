@@ -11,4 +11,6 @@ logos_test(
     TEST_SOURCES
         main.cpp
         test_forum.cpp
+    GENERATED_DIR
+        ../generated_code
 )

@@ -1,11 +1,5 @@
 #include "forum_app_impl.h"
-
-#define OMIT_LOGOS_SDK
-
-#ifdef OMIT_LOGOS_SDK
-#else
 #include "logos_sdk.h"
-#endif
 #define MODULE_VERSION "1.0.0"
 
 int64_t ForumAppImpl::add(int64_t a, int64_t b) { return a + b; }
@@ -43,11 +37,7 @@ int64_t ForumAppImpl::fibonacci(int64_t n) {
 std::string ForumAppImpl::libVersion() { return std::string(MODULE_VERSION); }
 
 std::string ForumAppImpl::getModuleInfo() {
-#ifdef OMIT_LOGOS_SDK
-  return std::string(MODULE_VERSION);
-#else
   return modules().forum_comms.libVersion();
-#endif
 }
 
 void ForumAppImpl::libVersionNotify() {
