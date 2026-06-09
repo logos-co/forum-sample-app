@@ -2,7 +2,7 @@
 # This is a simple example showing how to use LogosModule.cmake
 
 cmake_minimum_required(VERSION 3.14)
-project(MinimalModulePlugin LANGUAGES CXX)
+project(ForumCommsPlugin LANGUAGES CXX)
 
 # Include the Logos Module CMake helper
 # For nix builds, this is provided via LOGOS_MODULE_BUILDER_ROOT

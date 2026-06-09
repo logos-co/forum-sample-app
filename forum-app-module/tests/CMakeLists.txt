@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(CalcModuleTests LANGUAGES CXX)
+project(ForumAppTests LANGUAGES CXX)
 
 include(LogosTest)
 

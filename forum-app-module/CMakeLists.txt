@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(CalcModulePlugin LANGUAGES CXX)
+project(ForumAppPlugin LANGUAGES CXX)
 
 # Include the Logos Module CMake helper (provided by logos-module-builder)
 if(DEFINED ENV{LOGOS_MODULE_BUILDER_ROOT})

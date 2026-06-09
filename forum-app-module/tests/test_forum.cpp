@@ -14,3 +14,10 @@ LOGOS_TEST(libVersion_converts_cstring_to_string) {
   ForumAppImpl forumApp;
   LOGOS_ASSERT_EQ(forumApp.libVersion(), std::string("1.0.0"));
 }
+
+LOGOS_TEST(calls_other_module) {
+  auto t = LogosTestContext("forum_app");
+
+  ForumAppImpl forumApp;
+  LOGOS_ASSERT_EQ(forumApp.getModuleInfo(), std::string("1.0.0"));
+}
