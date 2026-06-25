@@ -1,16 +1,13 @@
 {
-  "name": "ui_example",
-  "display_name": "UI Example",
+  "name": "minimal",
+  "display_name": "Minimal Module",
   "version": "1.0.0",
-  "type": "ui_qml",
+  "type": "core",
   "interface": "universal",
   "category": "example",
-  "description": "A C++ UI module (universal backend) with QML view (process-isolated)",
-  "main": "ui_example_plugin",
-  "icon": null,
-  "view": "qml/Main.qml",
+  "description": "A minimal example Logos module",
+  "main": "minimal_plugin",
   "dependencies": [],
-  "codegen": { "rep": "src/ui_example.rep" },
 
   "nix": {
     "packages": {
