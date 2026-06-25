@@ -1,0 +1,26 @@
+{
+  "name": "forum_ui",
+  "version": "1.0.0",
+  "type": "ui_qml",
+  "category": "tools",
+  "description": "Forum App UI — ",
+  "main": "forum_ui_plugin",
+  "view": "qml/Main.qml",
+  "icon": "icons/forum.png",
+  "dependencies": [
+    "forum_app"
+  ],
+  "nix": {
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}
