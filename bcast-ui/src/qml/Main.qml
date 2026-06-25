@@ -6,7 +6,7 @@ Item {
     id: root
 
     // Typed replica — auto-synced properties and callable slots.
-    readonly property var backend: logos.module("ui_example")
+    readonly property var backend: logos.module("broadcast_app")
     property bool ready: false
 
     // "status" property from the .rep file, auto-updated via QTRO.
@@ -15,12 +15,12 @@ Item {
     Connections {
         target: logos
         function onViewModuleReadyChanged(moduleName, isReady) {
-            if (moduleName === "ui_example")
+            if (moduleName === "broadcast_app")
                 root.ready = isReady && root.backend !== null;
         }
     }
     Component.onCompleted: {
-        root.ready = root.backend !== null && logos.isViewModuleReady("ui_example");
+        root.ready = root.backend !== null && logos.isViewModuleReady("broadcast_app");
     }
 
     ColumnLayout {
@@ -29,7 +29,7 @@ Item {
         spacing: 16
 
         Text {
-            text: "UI Example (C++ backend)"
+            text: "Broadcast App (C++ backend)"
             font.pixelSize: 20
             color: "#ffffff"
             Layout.alignment: Qt.AlignHCenter

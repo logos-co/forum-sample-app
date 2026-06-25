@@ -1,5 +1,5 @@
 {
-  description = "Logos ui_qml module (C++ backend + QML view) — replace with your description";
+  description = "Broadcast App — Logos ui_qml module (C++ backend + QML view)";
 
   inputs = {
     logos-module-builder.url = "github:logos-co/logos-module-builder";

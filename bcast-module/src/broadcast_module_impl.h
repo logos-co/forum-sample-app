@@ -4,7 +4,7 @@
 #include "logos_module_context.h"
 
 /**
- * @brief A minimal universal Logos module.
+ * @brief A broadcast universal Logos module.
  *
  * In the universal authoring model you write only this implementation class.
  * Its public methods ARE the module's API — callable by other modules and from
@@ -19,7 +19,7 @@
  *
  * Module code is Qt-free: use `std::string` and friends, not `QString`.
  */
-class MinimalImpl : public LogosModuleContext
+class BroadcastModuleImpl : public LogosModuleContext
 {
 public:
     /// Returns a greeting and announces it as a typed `greeted` event.
@@ -30,6 +30,6 @@ public:
 
 logos_events:
     /// Emitted by greet() with the greeting it produced. Other modules
-    /// subscribe with `modules().minimal.onGreeted(...)`.
+    /// subscribe with `modules().broadcast_module.onGreeted(...)`.
     void greeted(const std::string& greeting);
 };

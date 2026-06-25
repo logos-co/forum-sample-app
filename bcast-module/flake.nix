@@ -1,5 +1,5 @@
 {
-  description = "Minimal Logos Module - Example using logos-module-builder";
+  description = "Broadcast Module - Example using logos-module-builder";
 
   inputs = {
     logos-module-builder.url = "github:logos-co/logos-module-builder";

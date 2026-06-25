@@ -1,16 +1,16 @@
 {
-  "name": "ui_example",
-  "display_name": "UI Example",
+  "name": "broadcast_app",
+  "display_name": "Broadcast App",
   "version": "1.0.0",
   "type": "ui_qml",
   "interface": "universal",
   "category": "example",
   "description": "A C++ UI module (universal backend) with QML view (process-isolated)",
-  "main": "ui_example_plugin",
+  "main": "broadcast_app_plugin",
   "icon": null,
   "view": "qml/Main.qml",
   "dependencies": [],
-  "codegen": { "rep": "src/ui_example.rep" },
+  "codegen": { "rep": "src/broadcast_app.rep" },
 
   "nix": {
     "packages": {

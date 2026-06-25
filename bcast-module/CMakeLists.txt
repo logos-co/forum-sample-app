@@ -1,9 +1,9 @@
-# Minimal Logos Module CMakeLists.txt
+# Broadcast Module CMakeLists.txt
 # A universal module: you write only the impl class; the Qt plugin glue
-# (interface + plugin classes) is generated from src/minimal_impl.h.
+# (interface + plugin classes) is generated from src/broadcast_module_impl.h.
 
 cmake_minimum_required(VERSION 3.14)
-project(MinimalModulePlugin LANGUAGES CXX)
+project(BroadcastModulePlugin LANGUAGES CXX)
 
 # Include the Logos Module CMake helper.
 # For nix builds, this is provided via LOGOS_MODULE_BUILDER_ROOT.
@@ -23,6 +23,6 @@ string(JSON MODULE_NAME GET ${METADATA_JSON} name)
 logos_module(
     NAME ${MODULE_NAME}
     SOURCES
-        src/minimal_impl.h
-        src/minimal_impl.cpp
+        src/broadcast_module_impl.h
+        src/broadcast_module_impl.cpp
 )

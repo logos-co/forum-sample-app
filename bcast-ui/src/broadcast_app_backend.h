@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rep_ui_example_source.h"
+#include "rep_broadcast_app_source.h"
 #include "logos_ui_plugin_context.h"
 
 /**
@@ -11,7 +11,7 @@
  * registration — are generated around it.
  *
  * It derives:
- *   - `UiExampleSimpleSource` — generated from ui_example.rep; implement its
+ *   - `BroadcastAppSimpleSource` — generated from broadcast_app.rep; implement its
  *     slots and feed its PROPs (e.g. `setStatus(...)`), which auto-sync to
  *     every QML replica.
  *   - `LogosUiPluginContext` — gives `onContextReady()` plus `modules()`, the
@@ -19,8 +19,8 @@
  *     declare (none here; see the typed-backend doc-test for a worked example).
  *     A UI plugin is a view, not a module, so that is all the context carries.
  */
-class UiExampleBackend : public UiExampleSimpleSource,
-                         public LogosUiPluginContext
+class BroadcastAppBackend : public BroadcastAppSimpleSource,
+                            public LogosUiPluginContext
 {
 public:
     int add(int a, int b) override;

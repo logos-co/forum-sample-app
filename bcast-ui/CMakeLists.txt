@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(UiExamplePlugin LANGUAGES CXX)
+project(BroadcastAppPlugin LANGUAGES CXX)
 
 if(DEFINED ENV{LOGOS_MODULE_BUILDER_ROOT})
     include($ENV{LOGOS_MODULE_BUILDER_ROOT}/cmake/LogosModule.cmake)
@@ -15,10 +15,10 @@ string(JSON MODULE_NAME GET ${METADATA_JSON} name)
 # repc; the generated *Plugin glue in generated_code/ is compiled automatically.
 logos_module(
     NAME ${MODULE_NAME}
-    REP_FILE src/ui_example.rep
+    REP_FILE src/broadcast_app.rep
     SOURCES
-        src/ui_example_backend.h
-        src/ui_example_backend.cpp
+        src/broadcast_app_backend.h
+        src/broadcast_app_backend.cpp
     INCLUDE_DIRS
         src
 )
