@@ -1,5 +1,5 @@
 #include "forum_comms_impl.h"
-#define MODULE_VERSION "1.0.0"
+#define MODULE_VERSION "1.0.2"
 
 int64_t ForumCommsImpl::add(int64_t a, int64_t b) { return a + b; }
 

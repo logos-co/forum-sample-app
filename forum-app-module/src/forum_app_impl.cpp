@@ -1,6 +1,6 @@
 #include "forum_app_impl.h"
 #include "logos_sdk.h"
-#define MODULE_VERSION "1.0.0"
+#define MODULE_VERSION "1.0.1"
 
 int64_t ForumAppImpl::add(int64_t a, int64_t b) { return a + b; }
 

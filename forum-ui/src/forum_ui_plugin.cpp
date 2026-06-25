@@ -20,8 +20,10 @@ int ForumUiPlugin::add(int a, int b) { return m_logos->forum_app.add(a, b); }
 QString ForumUiPlugin::getVersion(int i) {
   switch (i) {
   case 0:
-    return m_logos->forum_app.libVersion();
+    return version();
   case 1:
+    return m_logos->forum_app.libVersion();
+  case 2:
     return m_logos->forum_app.getModuleInfo();
   default:
     return version();
