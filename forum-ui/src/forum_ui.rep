@@ -1,0 +1,5 @@
+class ForumUi
+{
+    SLOT(int add(int a, int b))
+    SLOT(QString getVersion(int i))
+}
