@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QTimer>
+
 #include "logos_ui_plugin_context.h"
 #include "rep_broadcast_app_source.h"
 
@@ -26,6 +28,12 @@ public:
 
 protected:
   // The backend's "start": fired once after the context is wired (see
-  // logos_module_context.h). Records the start instant for the QML timer.
+  // logos_module_context.h). Starts the per-second tick.
   void onContextReady() override;
+
+private:
+  // Ticks once per second while the backend is alive, pushing the running
+  // count to every QML replica via the backendElapsedSeconds PROP.
+  QTimer m_tickTimer;
+  int m_elapsedSeconds = 0;
 };

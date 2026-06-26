@@ -1,7 +1,5 @@
 #include "broadcast_app_backend.h"
 
-#include <chrono>
-
 // Generated umbrella: LogosModules (behind modules()) from
 // metadata.json#dependencies — typed wrappers + typed event accessors.
 // (No dependencies here, but include it once you add some.)
@@ -15,12 +13,11 @@ int BroadcastAppBackend::add(int a, int b) {
 }
 
 void BroadcastAppBackend::onContextReady() {
-  // Wall-clock (Unix-epoch ms) so the QML replica — running in the same
-  // ui-host process — can subtract it from JS Date.now(). std::chrono only;
-  // no Qt time types. Published once as a synced PROP, so QML does the
-  // per-frame counting with zero IPC per tick.
-  const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         std::chrono::system_clock::now().time_since_epoch())
-                         .count();
-  setBackendStartedAtMs(static_cast<double>(nowMs));
+  // Tick once per second while the backend is alive, incrementing the count
+  // and pushing it to every QML replica as a synced PROP. The timer only runs
+  // as long as this backend (and its event loop) is active.
+  QObject::connect(&m_tickTimer, &QTimer::timeout, [this]() {
+    setBackendElapsedSeconds(++m_elapsedSeconds);
+  });
+  m_tickTimer.start(1000);
 }

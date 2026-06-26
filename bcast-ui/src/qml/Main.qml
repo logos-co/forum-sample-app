@@ -90,39 +90,32 @@ Item {
         }
 
         // Pure-QML elapsed timer — no C++ backend involvement.
-        // Driven by the render loop (one tick per frame) and derived from
-        // wall-clock time, so it never drifts or accumulates dropped ticks.
+        // Ticks once per second from a Timer (only runs while the frontend is
+        // active), incrementing the counter each tick.
         Text {
             id: elapsedText
-            property double startMs: Date.now()
             property int elapsed: 0
-            text: "Elapsed since launch: " + elapsed + "ms"
+            text: "Elapsed since launch: " + elapsed + "s"
             color: "#8b949e"
             font.pixelSize: 13
 
-            FrameAnimation {
+            Timer {
+                interval: 1000
                 running: true
-                onTriggered: elapsedText.elapsed = Math.round(Date.now() - elapsedText.startMs)
+                repeat: true
+                onTriggered: elapsedText.elapsed += 1
             }
         }
 
-        // Backend-driven timer — start instant comes from the C++ backend's
-        // onContextReady() (no Qt time types there; std::chrono only), synced
-        // once as the backendStartedAtMs PROP. QML does the per-frame counting,
-        // so there's no IPC per tick. Reads 0 until the PROP syncs.
+        // Backend-driven timer — the C++ backend ticks once per second while
+        // it's active (see onContextReady) and pushes the running count as the
+        // backendElapsedSeconds PROP, so QML just renders the synced value.
         Text {
             id: backendElapsedText
-            property double startMs: root.backend ? root.backend.backendStartedAtMs : 0
-            property int elapsed: 0
-            text: startMs > 0 ? "Elapsed since backend start: " + elapsed + "ms"
-                              : "Waiting for backend start..."
+            property int elapsed: root.backend ? root.backend.backendElapsedSeconds : 0
+            text: "Elapsed since backend start: " + elapsed + "s"
             color: "#8b949e"
             font.pixelSize: 13
-
-            FrameAnimation {
-                running: backendElapsedText.startMs > 0
-                onTriggered: backendElapsedText.elapsed = Math.round(Date.now() - backendElapsedText.startMs)
-            }
         }
 
         Item {
