@@ -1,7 +1,7 @@
 #pragma once
 
-#include <string>
 #include "logos_module_context.h"
+#include <string>
 
 /**
  * @brief A broadcast universal Logos module.
@@ -19,17 +19,16 @@
  *
  * Module code is Qt-free: use `std::string` and friends, not `QString`.
  */
-class BroadcastModuleImpl : public LogosModuleContext
-{
+class BroadcastModuleImpl : public LogosModuleContext {
 public:
-    /// Returns a greeting and announces it as a typed `greeted` event.
-    std::string greet(const std::string& name);
+  /// Returns a greeting and announces it as a typed `greeted` event.
+  std::string greet(const std::string &name);
 
-    /// Returns a short status string.
-    std::string getStatus();
+  /// Returns a short status string.
+  std::string getStatus();
 
-logos_events:
-    /// Emitted by greet() with the greeting it produced. Other modules
-    /// subscribe with `modules().broadcast_module.onGreeted(...)`.
-    void greeted(const std::string& greeting);
+  logos_events :
+      /// Emitted by greet() with the greeting it produced. Other modules
+      /// subscribe with `modules().broadcast_module.onGreeted(...)`.
+      void greeted(const std::string &greeting);
 };
