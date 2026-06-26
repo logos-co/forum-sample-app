@@ -24,4 +24,9 @@ class BroadcastAppBackend : public BroadcastAppSimpleSource,
 {
 public:
     int add(int a, int b) override;
+
+protected:
+    // The backend's "start": fired once after the context is wired (see
+    // logos_module_context.h). Records the start instant for the QML timer.
+    void onContextReady() override;
 };
