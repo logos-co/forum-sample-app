@@ -3,9 +3,12 @@
 #include <iostream>
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLatin1String>
 #include <QTimer>
+#include <QUuid>
 #include <QVariantList>
 
 // Generated umbrella: LogosModules (behind modules()) built from
@@ -20,12 +23,23 @@ namespace {
 void logEvent(const std::string &what) {
   std::cerr << "[broadcast_app backend] " << what << std::endl;
 }
+
+// A fresh, collision-free message id (also the topic id, for topics).
+QString newId() {
+  return QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
+
+// Local-echo timestamp in the same units delivery_module reports for received
+// messages: nanoseconds since the Unix epoch.
+qint64 nowNs() {
+  return QDateTime::currentMSecsSinceEpoch() * 1000000LL;
+}
 } // namespace
 
 // A LIP-23 content topic (https://lip.logos.co/messaging/informational/23/topics.html).
-// Hard-coded so every instance of this app talks on the same channel.
+// Hard-coded so every instance of this app shares one forum.
 const QString BroadcastAppBackend::kTopic =
-    QStringLiteral("/broadcast-app/1/messages/proto");
+    QStringLiteral("/broadcast-app/1/forum/proto");
 
 BroadcastAppBackend::BroadcastAppBackend() {
   // Runs in the ui-host process before the context is wired.
@@ -59,18 +73,22 @@ void BroadcastAppBackend::bootstrap() {
           setStatus(data.at(0).toString());
       });
 
-  // Inbound messages on any subscribed topic. data[2] is the raw payload bytes;
-  // we publish UTF-8 text, so decode it back to a QString. data[3] is the
-  // message timestamp (qint64, ns since epoch).
+  // Inbound forum messages on the subscribed topic. data[2] is the raw payload
+  // bytes (a JSON ForumMessage envelope); data[3] is the timestamp (qint64, ns
+  // since epoch). Non-forum payloads are ignored.
   modules().delivery_module.on(
       "messageReceived", [this](const QVariantList &data) {
         if (data.size() < 4)
           return;
-        const QByteArray payload = data.at(2).toByteArray();
-        const QString text = QString::fromUtf8(payload);
-        logEvent("messageReceived on " + data.at(1).toString().toStdString() +
-                 " -> \"" + text.toStdString() + "\"");
-        emit messageReceived(text, data.at(3).toLongLong());
+        ForumMessage msg;
+        if (!decodeForumMessage(data.at(2).toByteArray(), msg)) {
+          logEvent("ignored non-forum message on " +
+                   data.at(1).toString().toStdString());
+          return;
+        }
+        logEvent("received " + msg.type.toStdString() +
+                 " id=" + msg.id.toStdString());
+        emitForumMessage(msg, data.at(3).toLongLong());
       });
 
   // --- Create + start the node against the logos.test fleet -----------------
@@ -106,24 +124,58 @@ void BroadcastAppBackend::bootstrap() {
   }
 
   setNodeReady(true);
-  setStatus(QStringLiteral("Listening on %1").arg(kTopic));
-  logEvent("node ready — listening on " + kTopic.toStdString());
+  setStatus(QStringLiteral("Connected to forum on %1").arg(kTopic));
+  logEvent("node ready — forum on " + kTopic.toStdString());
 }
 
-QString BroadcastAppBackend::sendMessage(QString text) {
+QString BroadcastAppBackend::createTopic(QString title, QString body) {
+  if (title.isEmpty())
+    return QStringLiteral("A topic needs a title");
+
+  ForumMessage msg;
+  msg.type = QStringLiteral("topic");
+  msg.id = newId();
+  msg.title = title;
+  msg.body = body;
+  return publish(msg);
+}
+
+QString BroadcastAppBackend::replyToTopic(QString topicId, QString body) {
+  if (topicId.isEmpty())
+    return QStringLiteral("No topic selected");
+  if (body.isEmpty())
+    return QStringLiteral("A reply needs a body");
+
+  ForumMessage msg;
+  msg.type = QStringLiteral("reply");
+  msg.id = newId();
+  msg.topicId = topicId;
+  msg.body = body;
+  return publish(msg);
+}
+
+QString BroadcastAppBackend::publish(const ForumMessage &msg) {
   if (!isContextReady() || !nodeReady())
     return QStringLiteral("Node not ready");
-  if (text.isEmpty())
-    return QStringLiteral("Nothing to send");
 
-  // delivery_module.send takes raw bytes; encode the plain text as UTF-8 so the
-  // receiver can decode it back with QString::fromUtf8 (see the event handler).
-  const QByteArray payload = text.toUtf8();
-  LogosResult r = modules().delivery_module.send(kTopic, payload);
+  LogosResult r = modules().delivery_module.send(kTopic, encodeForumMessage(msg));
   if (!r.success) {
     logEvent("send failed: " + r.getError().toStdString());
     return r.getError();
   }
-  logEvent("sent message, requestId=" + r.getString().toStdString());
+  logEvent("published " + msg.type.toStdString() + " id=" + msg.id.toStdString() +
+           ", requestId=" + r.getString().toStdString());
+
+  // Local echo — the relay won't loop our own message back, so surface it now.
+  // The id lets the QML view de-dupe if the network ever does echo it.
+  emitForumMessage(msg, nowNs());
   return QString(); // empty == success
+}
+
+void BroadcastAppBackend::emitForumMessage(const ForumMessage &msg,
+                                           qint64 timestamp) {
+  if (msg.type == QLatin1String("topic"))
+    emit topicReceived(msg.id, msg.title, msg.body, timestamp);
+  else if (msg.type == QLatin1String("reply"))
+    emit replyReceived(msg.id, msg.topicId, msg.body, timestamp);
 }

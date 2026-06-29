@@ -19,6 +19,8 @@ logos_module(
     SOURCES
         src/broadcast_app_backend.h
         src/broadcast_app_backend.cpp
+        src/forum_message.h
+        src/forum_message.cpp
     INCLUDE_DIRS
         src
 )
