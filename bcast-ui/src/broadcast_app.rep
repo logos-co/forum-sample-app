@@ -1,0 +1,20 @@
+class BroadcastApp
+{
+    // Send a plain-text message to the hard-coded broadcast topic.
+    // Returns an empty string on success, or an error description on failure.
+    SLOT(QString sendMessage(QString text))
+
+    // Human-readable node/connection status: bootstrap progress first, then
+    // delivery_module's connectionStateChanged values (Connected / … ).
+    PROP(QString status="Starting…" READONLY)
+
+    // True once the node is up and subscribed to the topic (send is enabled).
+    PROP(bool nodeReady=false READONLY)
+
+    // The hard-coded content topic this app listens on and broadcasts to.
+    PROP(QString topic="" READONLY)
+
+    // A plain-text message arrived on the subscribed topic. `timestamp` is
+    // nanoseconds since the Unix epoch, as delivered by delivery_module.
+    SIGNAL(messageReceived(QString text, qint64 timestamp))
+}

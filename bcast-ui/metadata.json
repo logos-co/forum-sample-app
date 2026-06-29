@@ -1,0 +1,28 @@
+{
+  "name": "broadcast_app",
+  "display_name": "Broadcast App",
+  "version": "1.0.0",
+  "type": "ui_qml",
+  "interface": "universal",
+  "category": "example",
+  "description": "A C++ UI module (universal backend) with QML view (process-isolated)",
+  "main": "broadcast_app_plugin",
+  "icon": null,
+  "view": "qml/Main.qml",
+  "dependencies": ["delivery_module"],
+  "codegen": { "rep": "src/broadcast_app.rep" },
+
+  "nix": {
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}
