@@ -1,6 +1,7 @@
 
 # Modules
-Information about module glue and loading [here](module-info.md).
+Information about module glue and loading [here](module-actions.md), and broader lifecycle information [here](module-info.md).
+
 
 ## Skills
 Reusable procedures live in `skills/`. Read the relevant one before the matching task:

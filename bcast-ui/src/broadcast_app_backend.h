@@ -20,10 +20,17 @@
  *     Qt-typed callers and event subscriptions for any `dependencies` you
  *     declare (none here; see the typed-backend doc-test for a worked example).
  *     A UI plugin is a view, not a module, so that is all the context carries.
+ *
+ * Every lifecycle hook and slot below logs to `std::cerr` so the backend's
+ * activity (which runs in its own isolated `ui-host` process) is visible in
+ * the host's stderr stream.
  */
 class BroadcastAppBackend : public BroadcastAppSimpleSource,
                             public LogosUiPluginContext {
 public:
+  BroadcastAppBackend();
+  ~BroadcastAppBackend() override;
+
   int add(int a, int b) override;
 
 protected:
@@ -32,6 +39,10 @@ protected:
   void onContextReady() override;
 
 private:
+  // Pushes the running count to every QML replica via the backendElapsedSeconds
+  // PROP each time it fires; logged so the timer callback is observable.
+  void onTick();
+
   // Ticks once per second while the backend is alive, pushing the running
   // count to every QML replica via the backendElapsedSeconds PROP.
   QTimer m_tickTimer;

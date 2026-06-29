@@ -5,6 +5,11 @@ import QtQuick.Layouts
 Item {
     id: root
 
+    // One consistently-tagged line per QML lifecycle / callback. console.log
+    // is routed to stderr by Qt's default message handler, so these land in
+    // the same stream as the C++ backend's std::cerr lines.
+    function log(msg) { console.log("[broadcast_app qml] " + msg); }
+
     // Typed replica — auto-synced properties and callable slots.
     readonly property var backend: logos.module("broadcast_app")
     property bool ready: false
@@ -12,16 +17,23 @@ Item {
     // "status" property from the .rep file, auto-updated via QTRO.
     readonly property string status: backend ? backend.status : ""
 
+    // Property-change callbacks — fire whenever the bound value updates.
+    onReadyChanged: log("ready changed -> " + ready)
+    onStatusChanged: log("backend status changed -> \"" + status + "\"")
+
     Connections {
         target: logos
         function onViewModuleReadyChanged(moduleName, isReady) {
+            root.log("onViewModuleReadyChanged(module=\"" + moduleName + "\", ready=" + isReady + ")");
             if (moduleName === "broadcast_app")
                 root.ready = isReady && root.backend !== null;
         }
     }
     Component.onCompleted: {
+        log("Component.onCompleted — view created");
         root.ready = root.backend !== null && logos.isViewModuleReady("broadcast_app");
     }
+    Component.onDestruction: log("Component.onDestruction — view torn down")
 
     ColumnLayout {
         anchors.fill: parent
@@ -64,10 +76,15 @@ Item {
                 text: "Add"
                 enabled: root.ready
                 onClicked: {
+                    var a = parseInt(inputA.text) || 0;
+                    var b = parseInt(inputB.text) || 0;
+                    root.log("Add clicked — calling backend.add(" + a + ", " + b + ")");
                     // logos.watch() delivers the pending reply via callbacks
-                    logos.watch(backend.add(parseInt(inputA.text) || 0, parseInt(inputB.text) || 0), function (value) {
+                    logos.watch(backend.add(a, b), function (value) {
+                        root.log("add reply (success) -> " + value);
                         resultText.text = "Result: " + value;
                     }, function (error) {
+                        root.log("add reply (error) -> " + error);
                         resultText.text = "Error: " + error;
                     });
                 }
@@ -103,7 +120,10 @@ Item {
                 interval: 1000
                 running: true
                 repeat: true
-                onTriggered: elapsedText.elapsed += 1
+                onTriggered: {
+                    elapsedText.elapsed += 1;
+                    root.log("QML Timer onTriggered — elapsed=" + elapsedText.elapsed + "s");
+                }
             }
         }
 
@@ -116,6 +136,9 @@ Item {
             text: "Elapsed since backend start: " + elapsed + "s"
             color: "#8b949e"
             font.pixelSize: 13
+
+            // Callback fired each time the backend pushes a new PROP value.
+            onElapsedChanged: root.log("backendElapsedSeconds synced from backend -> " + elapsed + "s")
         }
 
         Item {

@@ -18,9 +18,16 @@
  *   - `onContextReady()` — override it to run once the module is wired
  *
  * Module code is Qt-free: use `std::string` and friends, not `QString`.
+ *
+ * Every lifecycle hook and callback below logs to `std::cerr` so the module's
+ * activity is visible in the host's stderr stream (the constructor/destructor
+ * are skipped by the codegen header parser, so they don't become API methods).
  */
 class BroadcastModuleImpl : public LogosModuleContext {
 public:
+  BroadcastModuleImpl();
+  ~BroadcastModuleImpl() override;
+
   /// Returns a greeting and announces it as a typed `greeted` event.
   std::string greet(const std::string &name);
 
@@ -31,4 +38,10 @@ public:
       /// Emitted by greet() with the greeting it produced. Other modules
       /// subscribe with `modules().broadcast_module.onGreeted(...)`.
       void greeted(const std::string &greeting);
+
+protected:
+  // Lifecycle hook from LogosModuleContext — fires exactly once, after the
+  // host wires the context (modulePath/instanceId/instancePersistencePath),
+  // before any method dispatch.
+  void onContextReady() override;
 };
