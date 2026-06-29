@@ -188,6 +188,12 @@ Wrapper signatures follow **this module's** `interface`: `universal` → std typ
 `qt`/`provider`/`legacy` → Qt types. `core_manager` is always emitted so apps
 can drive `liblogos_core` even though it can't be introspected at build time.
 
+> **Doing this in practice:** declaring a dependency and calling/subscribing to it
+> through `modules().<dep>` (across all three authoring flavors) is a step-by-step
+> procedure — see the [use-another-module](skills/use-another-module/SKILL.md)
+> skill, and [use-delivery-module](skills/use-delivery-module/SKILL.md) for the
+> messaging case.
+
 ### Events
 
 Events are the other half of a module's API. A universal module declares them in
