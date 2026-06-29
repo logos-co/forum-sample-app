@@ -3,8 +3,9 @@
 
   inputs = {
     logos-module-builder.url = "github:logos-co/logos-module-builder";
-    # Add core module dependencies as inputs (must match metadata.json "dependencies"), e.g.:
-    # some_module.url = "github:logos-co/logos-some-module";
+    # Core module dependency — must match metadata.json "dependencies".
+    # Pinned to v0.1.3 (the version this app's delivery usage targets).
+    delivery_module.url = "github:logos-co/logos-delivery-module/v0.1.3";
   };
 
   outputs = inputs@{ logos-module-builder, ... }:

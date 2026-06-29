@@ -14,12 +14,12 @@ Item {
     readonly property var backend: logos.module("broadcast_app")
     property bool ready: false
 
-    // "status" property from the .rep file, auto-updated via QTRO.
-    readonly property string status: backend ? backend.status : ""
+    // PROPs from the .rep file, auto-updated via QtRO.
+    readonly property string status:    backend ? backend.status    : ""
+    readonly property bool   nodeReady: backend ? backend.nodeReady : false
+    readonly property string topic:     backend ? backend.topic     : ""
 
-    // Property-change callbacks — fire whenever the bound value updates.
-    onReadyChanged: log("ready changed -> " + ready)
-    onStatusChanged: log("backend status changed -> \"" + status + "\"")
+    onStatusChanged: log("status -> \"" + status + "\"")
 
     Connections {
         target: logos
@@ -29,120 +29,143 @@ Item {
                 root.ready = isReady && root.backend !== null;
         }
     }
+
+    // Inbound plain-text messages, pushed by the backend from delivery_module's
+    // messageReceived event.
+    Connections {
+        target: root.backend
+        ignoreUnknownSignals: true
+        function onMessageReceived(text, timestamp) {
+            root.log("messageReceived -> \"" + text + "\"");
+            root.appendMessage(text, "in", timestamp);
+        }
+    }
+
     Component.onCompleted: {
         log("Component.onCompleted — view created");
         root.ready = root.backend !== null && logos.isViewModuleReady("broadcast_app");
     }
     Component.onDestruction: log("Component.onDestruction — view torn down")
 
+    // delivery_module timestamps are nanoseconds since the Unix epoch; ms is
+    // plenty for display. A 0/absent timestamp falls back to now.
+    function formatTs(ts) {
+        var d = ts ? new Date(Math.floor(ts / 1000000)) : new Date();
+        return Qt.formatDateTime(d, "hh:mm:ss");
+    }
+
+    function appendMessage(body, origin, ts) {
+        messagesModel.append({ body: body, origin: origin, ts: root.formatTs(ts) });
+        Qt.callLater(messageView.positionViewAtEnd);
+    }
+
+    function send() {
+        var text = input.text;
+        if (!text || !root.nodeReady) return;
+        root.log("Send clicked — calling backend.sendMessage(\"" + text + "\")");
+        // logos.watch() delivers the pending reply via callbacks. sendMessage
+        // returns "" on success, or an error string on failure.
+        logos.watch(backend.sendMessage(text), function (err) {
+            if (err) {
+                root.log("send reply (error) -> " + err);
+                root.appendMessage("⚠ " + err, "err", 0);
+            } else {
+                root.log("send reply (success)");
+                // Echo our own message locally — the network won't loop it back.
+                root.appendMessage(text, "out", 0);
+            }
+        }, function (e) {
+            root.log("send reply (transport error) -> " + e);
+            root.appendMessage("⚠ " + e, "err", 0);
+        });
+        input.clear();
+    }
+
+    ListModel { id: messagesModel }
+
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 24
-        spacing: 16
+        anchors.margins: 20
+        spacing: 12
 
         Text {
-            text: "Broadcast App (C++ backend)"
+            text: "Broadcast App"
             font.pixelSize: 20
             color: "#ffffff"
-            Layout.alignment: Qt.AlignHCenter
         }
 
-        // Connection status
+        // Hard-coded topic this app listens on and broadcasts to.
         Text {
-            text: root.ready ? "Connected" : "Connecting to backend..."
-            color: root.ready ? "#56d364" : "#f0883e"
+            text: "Topic: " + (root.topic.length > 0 ? root.topic : "—")
+            color: "#8b949e"
+            font.pixelSize: 12
+            font.family: "monospace"
+        }
+
+        // Node / connection status.
+        Text {
+            text: (root.nodeReady ? "● " : "○ ") + (root.status.length > 0 ? root.status : "Connecting to backend…")
+            color: root.nodeReady ? "#56d364" : "#f0883e"
             font.pixelSize: 12
         }
 
-        RowLayout {
-            spacing: 12
+        // Message log (received, sent, and errors).
+        Rectangle {
             Layout.fillWidth: true
-
-            TextField {
-                id: inputA
-                placeholderText: "a"
-                Layout.preferredWidth: 80
-                validator: IntValidator {}
-            }
-
-            TextField {
-                id: inputB
-                placeholderText: "b"
-                Layout.preferredWidth: 80
-                validator: IntValidator {}
-            }
-
-            Button {
-                text: "Add"
-                enabled: root.ready
-                onClicked: {
-                    var a = parseInt(inputA.text) || 0;
-                    var b = parseInt(inputB.text) || 0;
-                    root.log("Add clicked — calling backend.add(" + a + ", " + b + ")");
-                    // logos.watch() delivers the pending reply via callbacks
-                    logos.watch(backend.add(a, b), function (value) {
-                        root.log("add reply (success) -> " + value);
-                        resultText.text = "Result: " + value;
-                    }, function (error) {
-                        root.log("add reply (error) -> " + error);
-                        resultText.text = "Error: " + error;
-                    });
-                }
-            }
-        }
-
-        // Shows the return value from the slot call
-        Text {
-            id: resultText
-            text: "Press Add to call the backend"
-            color: "#56d364"
-            font.pixelSize: 15
-        }
-
-        // Shows the auto-synced "status" property from the backend
-        Text {
-            text: "Backend status: " + root.status
-            color: "#8b949e"
-            font.pixelSize: 13
-        }
-
-        // Pure-QML elapsed timer — no C++ backend involvement.
-        // Ticks once per second from a Timer (only runs while the frontend is
-        // active), incrementing the counter each tick.
-        Text {
-            id: elapsedText
-            property int elapsed: 0
-            text: "Elapsed since launch: " + elapsed + "s"
-            color: "#8b949e"
-            font.pixelSize: 13
-
-            Timer {
-                interval: 1000
-                running: true
-                repeat: true
-                onTriggered: {
-                    elapsedText.elapsed += 1;
-                    root.log("QML Timer onTriggered — elapsed=" + elapsedText.elapsed + "s");
-                }
-            }
-        }
-
-        // Backend-driven timer — the C++ backend ticks once per second while
-        // it's active (see onContextReady) and pushes the running count as the
-        // backendElapsedSeconds PROP, so QML just renders the synced value.
-        Text {
-            id: backendElapsedText
-            property int elapsed: root.backend ? root.backend.backendElapsedSeconds : 0
-            text: "Elapsed since backend start: " + elapsed + "s"
-            color: "#8b949e"
-            font.pixelSize: 13
-
-            // Callback fired each time the backend pushes a new PROP value.
-            onElapsedChanged: root.log("backendElapsedSeconds synced from backend -> " + elapsed + "s")
-        }
-
-        Item {
             Layout.fillHeight: true
+            color: "#0d1117"
+            border.color: "#30363d"
+            radius: 6
+
+            ListView {
+                id: messageView
+                anchors.fill: parent
+                anchors.margins: 8
+                clip: true
+                spacing: 6
+                model: messagesModel
+
+                delegate: RowLayout {
+                    width: ListView.view ? ListView.view.width : implicitWidth
+                    spacing: 8
+
+                    Text {
+                        text: model.ts
+                        color: "#6e7681"
+                        font.pixelSize: 11
+                        font.family: "monospace"
+                        Layout.alignment: Qt.AlignTop
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: model.body
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        color: model.origin === "out" ? "#58a6ff"
+                             : model.origin === "err" ? "#f85149"
+                             :                           "#e6edf3"
+                        font.pixelSize: 13
+                    }
+                }
+            }
+        }
+
+        // Composer — send plain text to the topic.
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            TextField {
+                id: input
+                Layout.fillWidth: true
+                placeholderText: root.nodeReady ? "Type a message…" : "Waiting for node…"
+                enabled: root.nodeReady
+                onAccepted: root.send()
+            }
+            Button {
+                text: "Send"
+                enabled: root.nodeReady && input.text.length > 0
+                onClicked: root.send()
+            }
         }
     }
 }
