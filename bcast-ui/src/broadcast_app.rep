@@ -1,20 +1,26 @@
 class BroadcastApp
 {
-    // Send a plain-text message to the hard-coded broadcast topic.
+    // Create a new forum topic, broadcast on the shared delivery topic.
     // Returns an empty string on success, or an error description on failure.
-    SLOT(QString sendMessage(QString text))
+    SLOT(QString createTopic(QString title, QString body))
+
+    // Reply to an existing topic (by its id). Returns "" on success.
+    SLOT(QString replyToTopic(QString topicId, QString body))
 
     // Human-readable node/connection status: bootstrap progress first, then
     // delivery_module's connectionStateChanged values (Connected / … ).
     PROP(QString status="Starting…" READONLY)
 
-    // True once the node is up and subscribed to the topic (send is enabled).
+    // True once the node is up and subscribed to the topic (composing enabled).
     PROP(bool nodeReady=false READONLY)
 
-    // The hard-coded content topic this app listens on and broadcasts to.
+    // The hard-coded content topic this forum runs on (for display).
     PROP(QString topic="" READONLY)
 
-    // A plain-text message arrived on the subscribed topic. `timestamp` is
-    // nanoseconds since the Unix epoch, as delivered by delivery_module.
-    SIGNAL(messageReceived(QString text, qint64 timestamp))
+    // A forum topic arrived on the channel (or was just created locally).
+    // `timestamp` is nanoseconds since the Unix epoch.
+    SIGNAL(topicReceived(QString id, QString title, QString body, qint64 timestamp))
+
+    // A reply to topic `topicId` arrived (or was just posted locally).
+    SIGNAL(replyReceived(QString id, QString topicId, QString body, qint64 timestamp))
 }
