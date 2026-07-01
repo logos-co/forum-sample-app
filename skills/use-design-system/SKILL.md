@@ -10,9 +10,9 @@ The design system ships two QML modules — `Logos.Theme` (design tokens:
 (themed components: `LogosText`, `LogosButton`, `LogosTextField`, …). Adopting
 it means **replacing raw `QtQuick.Controls` + hardcoded hex** with these.
 
-Reference: [repos/logos-design-system/README.md](../../repos/logos-design-system/README.md)
+Reference: [ref-repos/logos-design-system/README.md](../../ref-repos/logos-design-system/README.md)
 (token catalog + control list). The canonical worked example is
-[repos/logos-delivery-demo/src/qml/Main.qml](../../repos/logos-delivery-demo/src/qml/Main.qml);
+[ref-repos/logos-delivery-demo/src/qml/Main.qml](../../ref-repos/logos-delivery-demo/src/qml/Main.qml);
 [src/qml/Main.qml](../../src/qml/Main.qml) in this repo is a second one. Browse
 live tokens/controls with `nix run` in the design-system repo (the storybook).
 

@@ -1,4 +1,4 @@
-# Anonymous Private Forums
+# Anonymous Forums
 
 ## Functional requirements (F of FURPS)
 
@@ -66,7 +66,9 @@ graph TD
 
 ## Arch/components (ADR)
 
-NB: Based on current state of modules depended on, will evolve with updates to functionality & documentation.
+Note:
+- Based on current state of modules depended on, will evolve with updates to functionality & documentation.
+- [ref-repos](ref-repos) refers to manully checked out repos for AI agents to refer to, .gitignor'ed since they are not part of the app. If referenced often, can hit repo hosting api limits.
 
 ### Overview
 

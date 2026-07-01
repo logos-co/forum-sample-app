@@ -8,13 +8,13 @@ description: Use the Logos delivery_module (liblogosdelivery / Waku messaging) f
 `delivery_module` wraps liblogosdelivery (Waku-based messaging) as a Logos core
 module. A consumer **bootstraps a node**, then **subscribes** to content topics
 and **sends** payloads; delivery results and inbound messages arrive as **async
-events**. This repo pins it to **v0.1.3** (`repos/logos-delivery-module`,
+events**. This repo pins it to **v0.1.3** (`ref-repos/logos-delivery-module`,
 `metadata.json#version` `0.1.3`).
 
 This is a concrete instance of [use-another-module](../use-another-module/SKILL.md)
 — read that for the dependency-wiring mechanics. The canonical usage reference is
-[repos/logos-delivery-demo](../../repos/logos-delivery-demo) (a ui_qml demo) and
-the full API in [delivery_module_plugin.h](../../repos/logos-delivery-module/src/delivery_module_plugin.h).
+[ref-repos/logos-delivery-demo](../../ref-repos/logos-delivery-demo) (a ui_qml demo) and
+the full API in [delivery_module_plugin.h](../../ref-repos/logos-delivery-module/src/delivery_module_plugin.h).
 A worked universal-ui_qml implementation lives in [bcast-ui](../../bcast-ui/src/broadcast_app_backend.cpp).
 
 ## Declare the dependency

@@ -2,12 +2,16 @@
 result
 result-*
 
+# repositories ai agents can reference
+ref-repos
+
 # CMake build directory
 build/
 
 # Clang cache files
 .cache/
 
+# tools used in testing
 logos
 modules
 pm

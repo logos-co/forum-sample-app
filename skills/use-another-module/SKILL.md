@@ -158,4 +158,4 @@ source signal / setting a PROP from inside the callback is safe.
   declare a *dependency interface* (a method/event contract) and bind it to a
   concrete module at runtime with `modules().bind_<interface>("concrete_module")`.
   See the "dependency interfaces" section of
-  [repos/logos-tutorial/logos-developer-guide.md](../../repos/logos-tutorial/logos-developer-guide.md).
+  [ref-repos/logos-tutorial/logos-developer-guide.md](../../ref-repos/logos-tutorial/logos-developer-guide.md).
