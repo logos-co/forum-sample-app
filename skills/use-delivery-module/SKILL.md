@@ -120,7 +120,7 @@ The peer id and lib version are only exposed via `getNodeInfo`:
 ## Shared-singleton bootstrap (important)
 
 `delivery_module` is a **singleton shared across all Basecamp apps**
-([module-considerations.md](../../module-considerations.md)). Another app may have
+([module-considerations.md](../../helper-mds/module-considerations.md)). Another app may have
 already created and started the node, so your `createNode`/`start` will fail with
 "already created". Don't abort — fall through to `subscribe` so you still receive
 on your topic:

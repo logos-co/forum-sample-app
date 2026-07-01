@@ -1,6 +1,6 @@
 
 # Modules
-Information about module glue and loading [here](module-actions.md), and broader lifecycle information [here](module-info.md).
+Information about module glue and loading [here](helper-mds/module-actions.md), and broader lifecycle information [here](helper-mds/module-info.md).
 
 
 ## Skills

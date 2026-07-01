@@ -115,9 +115,9 @@ source signal / setting a PROP from inside the callback is safe.
   consumer (`logos_core_load_module_with_dependencies`). For `nix run`
   standalone, deps are baked into the app at build time
   (`collectAllModuleDeps`); change deps → rebuild. See
-  [module-actions.md](../../module-actions.md).
+  [module-actions.md](../../helper-mds/module-actions.md).
 - **Shared singleton state** — a dependency is loaded **once** and shared by every
-  app that depends on it ([module-considerations.md](../../module-considerations.md)).
+  app that depends on it ([module-considerations.md](../../helper-mds/module-considerations.md)).
   Don't assume you are the first/only user: an init-once call (e.g. a
   `createNode`-style bootstrap) may fail because another app already ran it —
   handle that path gracefully rather than aborting.
