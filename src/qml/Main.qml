@@ -2,6 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+import Logos.Theme
+import Logos.Controls
+
 Item {
     id: root
 
@@ -13,6 +16,11 @@ Item {
     // Typed replica — auto-synced properties and callable slots.
     readonly property var backend: logos.module("broadcast_app")
     property bool ready: false
+
+    // Monospace family for code-like values (the topic id). The design system
+    // ships no mono token, so centralise the generic family here — Qt maps
+    // "monospace" to the platform's fixed-pitch font.
+    readonly property string monoFont: "monospace"
 
     // PROPs from the .rep file, auto-updated via QtRO.
     readonly property string status:    backend ? backend.status    : ""
@@ -135,7 +143,7 @@ Item {
         root.log("createTopic(\"" + title + "\")");
         logos.watch(backend.createTopic(title, body), function (err) {
             if (err) { root.lastError = err; root.log("createTopic error -> " + err); }
-            else { titleField.clear(); bodyField.clear(); }
+            else { titleField.text = ""; bodyField.text = ""; }
         }, function (e) { root.lastError = e; });
     }
 
@@ -146,38 +154,46 @@ Item {
         root.log("replyToTopic(" + root.selectedTopicId + ")");
         logos.watch(backend.replyToTopic(root.selectedTopicId, body), function (err) {
             if (err) { root.lastError = err; root.log("reply error -> " + err); }
-            else { replyField.clear(); }
+            else { replyField.text = ""; }
         }, function (e) { root.lastError = e; });
     }
 
     // ── Layout ──────────────────────────────────────────────────────────────────
+    // Fill the view with the theme background — the host window is transparent
+    // underneath, so every screen paints its own surface.
+    Rectangle {
+        anchors.fill: parent
+        color: Theme.palette.background
+    }
+
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 16
-        spacing: 10
+        anchors.margins: Theme.spacing.large
+        spacing: Theme.spacing.small
 
         // Header
-        Text {
+        LogosText {
             text: "Broadcast Forum"
-            font.pixelSize: 20
-            color: "#ffffff"
+            font.pixelSize: Theme.typography.panelTitleText
+            font.weight: Theme.typography.weightBold
+            color: Theme.palette.text
         }
-        Text {
+        LogosText {
             text: "Topic: " + (root.topic.length > 0 ? root.topic : "—")
-            color: "#8b949e"
-            font.pixelSize: 11
-            font.family: "monospace"
+            color: Theme.palette.textSecondary
+            font.pixelSize: Theme.typography.secondaryText
+            font.family: root.monoFont
         }
-        Text {
+        LogosText {
             text: (root.nodeReady ? "● " : "○ ") + (root.status.length > 0 ? root.status : "Connecting to backend…")
-            color: root.nodeReady ? "#56d364" : "#f0883e"
-            font.pixelSize: 12
+            color: root.nodeReady ? Theme.palette.success : Theme.palette.warning
+            font.pixelSize: Theme.typography.secondaryText
         }
-        Text {
+        LogosText {
             visible: root.lastError.length > 0
             text: "⚠ " + root.lastError
-            color: "#f85149"
-            font.pixelSize: 12
+            color: Theme.palette.error
+            font.pixelSize: Theme.typography.secondaryText
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
         }
@@ -186,34 +202,49 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 12
+            spacing: Theme.spacing.medium
 
             // ── Left: new-topic composer + topic list ──────────────────────────
             ColumnLayout {
                 Layout.preferredWidth: 260
                 Layout.minimumWidth: 220
                 Layout.fillHeight: true
-                spacing: 8
+                spacing: Theme.spacing.small
 
-                Text { text: "Topics"; color: "#e6edf3"; font.pixelSize: 14; font.bold: true }
+                LogosText {
+                    text: "Topics"
+                    color: Theme.palette.text
+                    font.pixelSize: Theme.typography.primaryText
+                    font.weight: Theme.typography.weightBold
+                }
 
-                TextField {
+                LogosTextField {
                     id: titleField
                     Layout.fillWidth: true
                     placeholderText: "New topic title…"
                     enabled: root.nodeReady
-                    onAccepted: bodyField.forceActiveFocus()
                 }
-                TextField {
+                // LogosTextField wraps its TextInput, so Enter is handled on the
+                // inner input rather than via an onAccepted on the control.
+                Connections {
+                    target: titleField.textInput
+                    function onAccepted() { bodyField.textInput.forceActiveFocus() }
+                }
+                LogosTextField {
                     id: bodyField
                     Layout.fillWidth: true
                     placeholderText: "Opening message (optional)…"
                     enabled: root.nodeReady
-                    onAccepted: root.createTopic()
                 }
-                Button {
+                Connections {
+                    target: bodyField.textInput
+                    function onAccepted() { root.createTopic() }
+                }
+                LogosButton {
                     text: "Create topic"
                     Layout.fillWidth: true
+                    Layout.preferredHeight: 40
+                    implicitHeight: 40
                     enabled: root.nodeReady && titleField.text.length > 0
                     onClicked: root.createTopic()
                 }
@@ -221,24 +252,26 @@ Item {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: "#0d1117"
-                    border.color: "#30363d"
-                    radius: 6
+                    color: Theme.palette.backgroundInset
+                    border.color: Theme.palette.borderHairline
+                    border.width: 1
+                    radius: Theme.spacing.radiusMedium
 
                     ListView {
                         id: topicList
                         anchors.fill: parent
-                        anchors.margins: 6
+                        anchors.margins: Theme.spacing.tiny
                         clip: true
-                        spacing: 4
+                        spacing: Theme.spacing.tiny
                         model: topicsModel
 
                         delegate: Rectangle {
                             width: ListView.view ? ListView.view.width : 0
-                            implicitHeight: tcol.implicitHeight + 12
-                            radius: 5
-                            color: model.tid === root.selectedTopicId ? "#1f6feb33" : "#161b22"
-                            border.color: model.tid === root.selectedTopicId ? "#1f6feb" : "#30363d"
+                            implicitHeight: tcol.implicitHeight + Theme.spacing.medium
+                            radius: Theme.spacing.radiusSmall
+                            color: model.tid === root.selectedTopicId ? Theme.palette.overlayOrange : Theme.palette.backgroundSecondary
+                            border.width: 1
+                            border.color: model.tid === root.selectedTopicId ? Theme.palette.primary : Theme.palette.borderHairline
 
                             MouseArea {
                                 anchors.fill: parent
@@ -251,22 +284,22 @@ Item {
                                 anchors.left: parent.left
                                 anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: 8
+                                anchors.margins: Theme.spacing.small
                                 spacing: 2
 
-                                Text {
+                                LogosText {
                                     Layout.fillWidth: true
                                     text: model.title
-                                    color: "#e6edf3"
-                                    font.pixelSize: 13
-                                    font.bold: true
+                                    color: Theme.palette.text
+                                    font.pixelSize: Theme.typography.primaryText
+                                    font.weight: Theme.typography.weightBold
                                     elide: Text.ElideRight
                                 }
-                                Text {
+                                LogosText {
                                     Layout.fillWidth: true
                                     text: model.replies + (model.replies === 1 ? " reply · " : " replies · ") + model.ts
-                                    color: "#8b949e"
-                                    font.pixelSize: 10
+                                    color: Theme.palette.textTertiary
+                                    font.pixelSize: Theme.typography.secondaryText
                                     elide: Text.ElideRight
                                 }
                             }
@@ -279,55 +312,56 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 8
+                spacing: Theme.spacing.small
                 visible: root.selectedTopicId.length > 0
 
-                Text {
+                LogosText {
                     Layout.fillWidth: true
                     text: root.selectedTitle
-                    color: "#ffffff"
-                    font.pixelSize: 16
-                    font.bold: true
+                    color: Theme.palette.text
+                    font.pixelSize: Theme.typography.subtitleText
+                    font.weight: Theme.typography.weightBold
                     wrapMode: Text.WordWrap
                 }
-                Text {
+                LogosText {
                     Layout.fillWidth: true
                     visible: root.selectedBody.length > 0
                     text: root.selectedBody
-                    color: "#c9d1d9"
-                    font.pixelSize: 13
+                    color: Theme.palette.textSecondary
+                    font.pixelSize: Theme.typography.primaryText
                     wrapMode: Text.WordWrap
                 }
 
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: "#0d1117"
-                    border.color: "#30363d"
-                    radius: 6
+                    color: Theme.palette.backgroundInset
+                    border.color: Theme.palette.borderHairline
+                    border.width: 1
+                    radius: Theme.spacing.radiusMedium
 
                     ListView {
                         id: threadView
                         anchors.fill: parent
-                        anchors.margins: 8
+                        anchors.margins: Theme.spacing.small
                         clip: true
-                        spacing: 6
+                        spacing: Theme.spacing.small
                         model: threadModel
 
                         delegate: ColumnLayout {
                             width: ListView.view ? ListView.view.width : 0
                             spacing: 1
-                            Text {
+                            LogosText {
                                 text: model.ts
-                                color: "#6e7681"
-                                font.pixelSize: 10
-                                font.family: "monospace"
+                                color: Theme.palette.textTertiary
+                                font.pixelSize: Theme.typography.secondaryText
+                                font.family: root.monoFont
                             }
-                            Text {
+                            LogosText {
                                 Layout.fillWidth: true
                                 text: model.body
-                                color: "#e6edf3"
-                                font.pixelSize: 13
+                                color: Theme.palette.text
+                                font.pixelSize: Theme.typography.primaryText
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             }
                         }
@@ -336,16 +370,23 @@ Item {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 8
-                    TextField {
+                    spacing: Theme.spacing.small
+                    LogosTextField {
                         id: replyField
                         Layout.fillWidth: true
                         placeholderText: root.nodeReady ? "Write a reply…" : "Waiting for node…"
                         enabled: root.nodeReady
-                        onAccepted: root.sendReply()
                     }
-                    Button {
+                    Connections {
+                        target: replyField.textInput
+                        function onAccepted() { root.sendReply() }
+                    }
+                    LogosButton {
                         text: "Reply"
+                        Layout.preferredWidth: 88
+                        Layout.preferredHeight: 40
+                        implicitWidth: 88
+                        implicitHeight: 40
                         enabled: root.nodeReady && replyField.text.length > 0
                         onClicked: root.sendReply()
                     }
@@ -357,11 +398,11 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 visible: root.selectedTopicId.length === 0
-                Text {
+                LogosText {
                     anchors.centerIn: parent
                     text: topicsModel.count > 0 ? "Select a topic to open it" : "No topics yet — create one"
-                    color: "#6e7681"
-                    font.pixelSize: 13
+                    color: Theme.palette.textTertiary
+                    font.pixelSize: Theme.typography.primaryText
                 }
             }
         }
