@@ -6,6 +6,8 @@
 
 For an idea that is like an app, start with a UI module & cpp backend - https://github.com/logos-co/logos-tutorial/blob/tutorial-v4/outputs/tutorial-cpp-ui-app.md, this uses [logos-module-builder](https://github.com/logos-co/logos-module-builder/) template `#ui-qml-backend`. (`tutorial-v4` is the latest tag at the time of writing).
 
+Be sure to `nix flake init ...` the logos module as per tutorial instructions for the relevant template.
+
 Apps should use the [logos-design-system](https://github.com/logos-co/logos-design-system), unless there are heavily bespoke UI design requirements.
 
 ### Reusable primitive
