@@ -218,6 +218,30 @@ Item {
         }, function (e) { root.lastError = e; });
     }
 
+    // LogosButton is pointer-only and sits outside the Tab focus chain. This
+    // wrapper turns any button into a proper tab stop: it joins the loop, draws a
+    // focus ring so the current stop is visible, and fires clicked() on
+    // Enter/Space just like a mouse press.
+    component FocusButton: LogosButton {
+        id: btn
+        activeFocusOnTab: true
+        Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                    || event.key === Qt.Key_Space) {
+                btn.clicked();
+                event.accepted = true;
+            }
+        }
+        Rectangle {
+            anchors.fill: parent
+            color: "transparent"
+            radius: btn.radius
+            border.width: 2
+            border.color: Theme.palette.overlayOrange
+            visible: btn.activeFocus
+        }
+    }
+
     // ── Layout ──────────────────────────────────────────────────────────────────
     // Fill the view with the theme background — the host window is transparent
     // underneath, so every screen paints its own surface.
@@ -283,6 +307,9 @@ Item {
                     Layout.fillWidth: true
                     placeholderText: "New topic title…"
                     enabled: root.nodeReady
+                    // Join the Tab focus loop — LogosTextField's inner TextInput has
+                    // activeFocusOnTab off by default, so Qt's chain skips it otherwise.
+                    Component.onCompleted: textInput.activeFocusOnTab = true
                 }
                 // LogosTextField wraps its TextInput, so Enter is handled on the
                 // inner input rather than via an onAccepted on the control.
@@ -295,12 +322,13 @@ Item {
                     Layout.fillWidth: true
                     placeholderText: "Opening message (optional)…"
                     enabled: root.nodeReady
+                    Component.onCompleted: textInput.activeFocusOnTab = true
                 }
                 Connections {
                     target: bodyField.textInput
                     function onAccepted() { root.createTopic() }
                 }
-                LogosButton {
+                FocusButton {
                     text: "Create topic"
                     Layout.fillWidth: true
                     Layout.preferredHeight: 40
@@ -430,12 +458,13 @@ Item {
                                 Layout.fillWidth: true
                                 placeholderText: "Topic title…"
                                 enabled: root.ready
+                                Component.onCompleted: textInput.activeFocusOnTab = true
                             }
                             Connections {
                                 target: restoreField.textInput
                                 function onAccepted() { root.restoreTopic() }
                             }
-                            LogosButton {
+                            FocusButton {
                                 text: "Restore"
                                 Layout.preferredWidth: 88
                                 Layout.preferredHeight: 40
@@ -497,12 +526,13 @@ Item {
                         Layout.fillWidth: true
                         placeholderText: root.nodeReady ? "Write a reply…" : "Waiting for node…"
                         enabled: root.nodeReady
+                        Component.onCompleted: textInput.activeFocusOnTab = true
                     }
                     Connections {
                         target: replyField.textInput
                         function onAccepted() { root.sendReply() }
                     }
-                    LogosButton {
+                    FocusButton {
                         text: "Reply"
                         Layout.preferredWidth: 88
                         Layout.preferredHeight: 40
