@@ -32,6 +32,9 @@ Item {
     property string selectedTopicId: ""
     property string selectedTitle: ""
     property string selectedBody: ""
+    // True while the open topic is a placeholder backfilled from a reply (its
+    // real topic message hasn't arrived) — drives the "restore from title" pane.
+    property bool selectedIsPlaceholder: false
     property string lastError: ""
 
     onStatusChanged: log("status -> \"" + status + "\"")
@@ -98,22 +101,64 @@ Item {
     }
 
     function addTopic(id, title, body, ts) {
-        if (root.findTopicIndex(id) >= 0) return;   // de-dupe (self-echo / network echo)
+        var i = root.findTopicIndex(id);
+        if (i >= 0) {
+            // Already known. If it's a placeholder we backfilled from an early
+            // reply, fill in the real title/body now; otherwise it's a
+            // self/network echo and we leave the existing row untouched.
+            if (topicsModel.get(i).placeholder)
+                root.fillTopic(i, title, body, ts);
+            return;
+        }
         topicsModel.append({
             tid: id, title: title, body: body,
             ts: root.formatTs(ts),
-            replies: root.countRepliesFor(id)       // catch up any orphan replies
+            replies: root.countRepliesFor(id),      // catch up any orphan replies
+            placeholder: false
         });
+    }
+
+    // A reply can outrun the topic it belongs to (out-of-order delivery, or we
+    // joined the channel after the topic was posted). Stand up a placeholder
+    // topic so the reply is visible and openable; addTopic() promotes it to a
+    // real topic in place once the topic message arrives.
+    function backfillTopic(topicId, ts) {
+        topicsModel.append({
+            tid: topicId,
+            title: "⏳ " + topicId.substring(0, 8),
+            body: "",
+            ts: root.formatTs(ts),
+            replies: 0,
+            placeholder: true
+        });
+    }
+
+    // Promote the placeholder at row `i` into a real topic, keeping any thread
+    // the user has already opened on it in sync.
+    function fillTopic(i, title, body, ts) {
+        topicsModel.setProperty(i, "title", title);
+        topicsModel.setProperty(i, "body", body);
+        topicsModel.setProperty(i, "ts", root.formatTs(ts));
+        topicsModel.setProperty(i, "placeholder", false);
+        if (topicsModel.get(i).tid === root.selectedTopicId) {
+            root.selectedTitle = title;
+            root.selectedBody = body;
+            root.selectedIsPlaceholder = false;
+        }
     }
 
     function addReply(id, topicId, body, ts) {
         if (root.replyExists(id)) return;           // de-dupe
         repliesModel.append({ rid: id, topicId: topicId, body: body, ts: root.formatTs(ts) });
 
-        // Bump the parent topic's reply count, if we know the topic yet.
+        // Bump the parent topic's reply count, backfilling a placeholder topic
+        // first if the reply arrived before its topic.
         var ti = root.findTopicIndex(topicId);
-        if (ti >= 0)
-            topicsModel.setProperty(ti, "replies", topicsModel.get(ti).replies + 1);
+        if (ti < 0) {
+            root.backfillTopic(topicId, ts);
+            ti = root.findTopicIndex(topicId);
+        }
+        topicsModel.setProperty(ti, "replies", topicsModel.get(ti).replies + 1);
 
         // If this reply belongs to the open thread, show it immediately.
         if (topicId === root.selectedTopicId)
@@ -127,6 +172,7 @@ Item {
         root.selectedTopicId = tid;
         root.selectedTitle = t.title;
         root.selectedBody = t.body;
+        root.selectedIsPlaceholder = t.placeholder === true;
         threadModel.clear();
         for (var j = 0; j < repliesModel.count; ++j) {
             var r = repliesModel.get(j);
@@ -144,6 +190,20 @@ Item {
         logos.watch(backend.createTopic(title, body), function (err) {
             if (err) { root.lastError = err; root.log("createTopic error -> " + err); }
             else { titleField.text = ""; bodyField.text = ""; }
+        }, function (e) { root.lastError = e; });
+    }
+
+    // Restore an open placeholder topic from a title pasted by the user. The
+    // backend verifies the title hashes to the topic id, then emits topicReceived
+    // (routed back through addTopic → fillTopic), so no local state is touched here.
+    function restoreTopic() {
+        if (!root.ready || restoreField.text.length === 0) return;
+        root.lastError = "";
+        var title = restoreField.text;
+        root.log("reconstructTopic(" + root.selectedTopicId + ")");
+        logos.watch(backend.reconstructTopic(root.selectedTopicId, title), function (err) {
+            if (err) { root.lastError = err; root.log("reconstruct error -> " + err); }
+            else { restoreField.text = ""; }
         }, function (e) { root.lastError = e; });
     }
 
@@ -290,14 +350,17 @@ Item {
                                 LogosText {
                                     Layout.fillWidth: true
                                     text: model.title
-                                    color: Theme.palette.text
+                                    color: model.placeholder ? Theme.palette.textSecondary : Theme.palette.text
                                     font.pixelSize: Theme.typography.primaryText
                                     font.weight: Theme.typography.weightBold
+                                    font.italic: model.placeholder === true
                                     elide: Text.ElideRight
                                 }
                                 LogosText {
                                     Layout.fillWidth: true
-                                    text: model.replies + (model.replies === 1 ? " reply · " : " replies · ") + model.ts
+                                    text: model.placeholder
+                                          ? model.replies + (model.replies === 1 ? " reply · awaiting topic…" : " replies · awaiting topic…")
+                                          : model.replies + (model.replies === 1 ? " reply · " : " replies · ") + model.ts
                                     color: Theme.palette.textTertiary
                                     font.pixelSize: Theme.typography.secondaryText
                                     elide: Text.ElideRight
@@ -332,6 +395,59 @@ Item {
                     wrapMode: Text.WordWrap
                 }
 
+                // Placeholder recovery: this topic is known only from its replies.
+                // Paste the title (shared out-of-band) to restore it — the backend
+                // accepts it only if it hashes to this topic's id.
+                Rectangle {
+                    Layout.fillWidth: true
+                    visible: root.selectedIsPlaceholder
+                    color: Theme.palette.backgroundInset
+                    border.color: Theme.palette.borderHairline
+                    border.width: 1
+                    radius: Theme.spacing.radiusMedium
+                    implicitHeight: restoreCol.implicitHeight + Theme.spacing.medium
+
+                    ColumnLayout {
+                        id: restoreCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.margins: Theme.spacing.small
+                        spacing: Theme.spacing.tiny
+
+                        LogosText {
+                            Layout.fillWidth: true
+                            text: "This topic hasn't arrived yet. Paste its title to restore it:"
+                            color: Theme.palette.textSecondary
+                            font.pixelSize: Theme.typography.secondaryText
+                            wrapMode: Text.WordWrap
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.spacing.small
+                            LogosTextField {
+                                id: restoreField
+                                Layout.fillWidth: true
+                                placeholderText: "Topic title…"
+                                enabled: root.ready
+                            }
+                            Connections {
+                                target: restoreField.textInput
+                                function onAccepted() { root.restoreTopic() }
+                            }
+                            LogosButton {
+                                text: "Restore"
+                                Layout.preferredWidth: 88
+                                Layout.preferredHeight: 40
+                                implicitWidth: 88
+                                implicitHeight: 40
+                                enabled: root.ready && restoreField.text.length > 0
+                                onClicked: root.restoreTopic()
+                            }
+                        }
+                    }
+                }
+
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -357,12 +473,17 @@ Item {
                                 font.pixelSize: Theme.typography.secondaryText
                                 font.family: root.monoFont
                             }
-                            LogosText {
+                            TextEdit {
                                 Layout.fillWidth: true
                                 text: model.body
+                                readOnly: true
+                                selectByMouse: true
+                                textFormat: TextEdit.PlainText
                                 color: Theme.palette.text
+                                selectionColor: Theme.palette.primary
+                                font.family: Theme.typography.publicSans
                                 font.pixelSize: Theme.typography.primaryText
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
                             }
                         }
                     }
