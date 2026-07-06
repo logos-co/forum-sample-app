@@ -23,6 +23,15 @@ struct ForumMessage {
   QString body;    ///< both
 };
 
+// Derive a topic's id from its title, as a content hash (SHA-256 hex over a
+// frozen canonical form of the title). The id is therefore deterministic and
+// reproducible: anyone with the exact title can recompute it, which is what lets
+// a user restore a topic they only heard about through its replies — paste the
+// shared title and the hash proves it's the right one. Title-only by design, so
+// two topics sharing a title share an id (the same thread); the body is not part
+// of the id and cannot be recovered from it.
+QString topicIdFor(const QString &title);
+
 // Serialise to a compact UTF-8 JSON envelope, ready for delivery_module.send().
 QByteArray encodeForumMessage(const ForumMessage &msg);
 

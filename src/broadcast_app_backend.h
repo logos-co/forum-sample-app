@@ -45,6 +45,10 @@ public:
   QString createTopic(QString title, QString body) override;
   QString replyToTopic(QString topicId, QString body) override;
 
+  // Locally restore a placeholder topic from its (hash-verified) title. See the
+  // .rep contract. Returns "" on success, or an error description.
+  QString reconstructTopic(QString topicId, QString title) override;
+
 protected:
   // The backend's "start": fired once after the context is wired (so modules()
   // is live). Schedules bootstrap() off the return path.

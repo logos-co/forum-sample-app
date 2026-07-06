@@ -134,10 +134,26 @@ QString BroadcastAppBackend::createTopic(QString title, QString body) {
 
   ForumMessage msg;
   msg.type = QStringLiteral("topic");
-  msg.id = newId();
+  msg.id = topicIdFor(title); // content-addressed: derived from the title
   msg.title = title;
   msg.body = body;
   return publish(msg);
+}
+
+QString BroadcastAppBackend::reconstructTopic(QString topicId, QString title) {
+  // Local recovery for a topic we only know through its replies (a backfilled
+  // placeholder in the view). The topic id is a hash of the title, so a title
+  // shared out-of-band and pasted here is provably the right one iff its hash
+  // matches. No network send — we just surface the verified topic locally, with
+  // an empty body (the body isn't part of the id and can't be recovered from
+  // it; it fills in later only if the original topic message reaches us).
+  if (title.isEmpty())
+    return QStringLiteral("Enter the topic title");
+  if (topicIdFor(title) != topicId)
+    return QStringLiteral("That title doesn't match this topic");
+
+  emit topicReceived(topicId, title, QString(), nowNs());
+  return QString(); // empty == success
 }
 
 QString BroadcastAppBackend::replyToTopic(QString topicId, QString body) {
