@@ -357,12 +357,17 @@ Item {
                                 font.pixelSize: Theme.typography.secondaryText
                                 font.family: root.monoFont
                             }
-                            LogosText {
+                            TextEdit {
                                 Layout.fillWidth: true
                                 text: model.body
+                                readOnly: true
+                                selectByMouse: true
+                                textFormat: TextEdit.PlainText
                                 color: Theme.palette.text
+                                selectionColor: Theme.palette.primary
+                                font.family: Theme.typography.publicSans
                                 font.pixelSize: Theme.typography.primaryText
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
                             }
                         }
                     }
