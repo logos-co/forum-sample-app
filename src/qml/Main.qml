@@ -406,21 +406,31 @@ Item {
                 spacing: Theme.spacing.small
                 visible: root.selectedTopicId.length > 0
 
-                LogosText {
+                TextEdit {
                     Layout.fillWidth: true
                     text: root.selectedTitle
+                    readOnly: true
+                    selectByMouse: true
+                    textFormat: TextEdit.PlainText
                     color: Theme.palette.text
+                    selectionColor: Theme.palette.primary
+                    font.family: Theme.typography.publicSans
                     font.pixelSize: Theme.typography.subtitleText
                     font.weight: Theme.typography.weightBold
-                    wrapMode: Text.WordWrap
+                    wrapMode: TextEdit.WordWrap
                 }
-                LogosText {
+                TextEdit {
                     Layout.fillWidth: true
                     visible: root.selectedBody.length > 0
                     text: root.selectedBody
+                    readOnly: true
+                    selectByMouse: true
+                    textFormat: TextEdit.PlainText
                     color: Theme.palette.textSecondary
+                    selectionColor: Theme.palette.primary
+                    font.family: Theme.typography.publicSans
                     font.pixelSize: Theme.typography.primaryText
-                    wrapMode: Text.WordWrap
+                    wrapMode: TextEdit.WordWrap
                 }
 
                 // Placeholder recovery: this topic is known only from its replies.
