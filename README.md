@@ -1,5 +1,11 @@
 # Anonymous Forums
 
+## tl;dr Usage
+
+For convenience, this Logos App can easily be installed through the [Zaki Bazaar](https://github.com/jzaki/zaki-bazaar) Package Repository.
+See instructions for how to add the repo, so you can then install the forum.
+
+
 ## Functional requirements (F of FURPS)
 
 Note: here "subscribed" and "topic" refer to app layer terminology.
