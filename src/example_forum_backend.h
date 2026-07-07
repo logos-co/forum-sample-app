@@ -4,10 +4,10 @@
 
 #include "forum_message.h"
 #include "logos_ui_plugin_context.h"
-#include "rep_broadcast_app_source.h"
+#include "rep_example_forum_source.h"
 
 /**
- * @brief UI backend for the Broadcast Forum (universal authoring model).
+ * @brief UI backend for Example Forum (universal authoring model).
  *
  * A single forum runs over one hard-coded delivery content topic (`kTopic`).
  * Every post — a topic creation or a reply — is a JSON `ForumMessage` envelope
@@ -24,7 +24,7 @@
  * are generated around it.
  *
  * It derives:
- *   - `BroadcastAppSimpleSource` — generated from broadcast_app.rep; implement
+ *   - `ExampleForumSimpleSource` — generated from example_forum.rep; implement
  *     its slots and feed its PROPs (e.g. `setStatus(...)`), which auto-sync to
  *     every QML replica.
  *   - `LogosUiPluginContext` — gives `onContextReady()` plus `modules()`, the
@@ -34,11 +34,11 @@
  * The C++ backend runs in its own isolated `ui-host` process; lifecycle hooks
  * and delivery events log to `std::cerr`, visible in the host's stderr stream.
  */
-class BroadcastAppBackend : public BroadcastAppSimpleSource,
+class ExampleForumBackend : public ExampleForumSimpleSource,
                             public LogosUiPluginContext {
 public:
-  BroadcastAppBackend();
-  ~BroadcastAppBackend() override;
+  ExampleForumBackend();
+  ~ExampleForumBackend() override;
 
   // .rep SLOTs — broadcast a new forum topic / a reply on the shared topic.
   // Each returns an empty string on success, or an error description.

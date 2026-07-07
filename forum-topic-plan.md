@@ -1,6 +1,6 @@
-# Plan — forum-topic functionality in `bcast-ui`
+# Plan — forum-topic functionality in `example_forum`
 
-Scope: **`bcast-ui` only.** No changes to `delivery_module`, the dependency
+Scope: **`example_forum` only.** No changes to `delivery_module`, the dependency
 wiring, or the hard-coded delivery topic `kTopic` (the single forum channel).
 
 ## Idea
@@ -44,7 +44,7 @@ Wire format (UTF-8 JSON, replaces the current raw-text payload):
 fields (a topic needs `title`; a reply needs `topicId`) — so any non-forum traffic
 on the channel is safely ignored.
 
-## 2. `.rep` contract — `src/broadcast_app.rep`
+## 2. `.rep` contract — `src/example_forum.rep`
 
 Replace the single `sendMessage` slot and `messageReceived` signal with
 forum-aware ones; keep the `status` / `nodeReady` / `topic` PROPs.
@@ -61,7 +61,7 @@ Two typed signals (vs one signal with a `type` arg) keep the QML mapping clean.
 Slots return `""` on success / an error string on failure — same convention as the
 current `sendMessage`.
 
-## 3. Backend — `src/broadcast_app_backend.{h,cpp}`
+## 3. Backend — `src/example_forum_backend.{h,cpp}`
 
 - **Receive:** in the existing `delivery_module.on("messageReceived", …)` handler,
   `decodeForumMessage(data[2].toByteArray(), …)`; on success
@@ -115,20 +115,20 @@ or `flake.nix` changes — `delivery_module` is already a dependency.
 
 ## Verification
 
-- `nix build` in `bcast-ui` (the real check; IDE/clangd errors here are the known
+- `nix build` in `example_forum` (the real check; IDE/clangd errors here are the known
   false positives — Qt headers aren't on clangd's path outside the nix build).
 - Manual end-to-end: two `nix run` instances → create a topic in A, see it in B;
   reply in B, see it in A.
 - Optional: a round-trip unit check for `encode`/`decode` (no test harness exists
-  in `bcast-ui` today, so this would be net-new).
+  in `example_forum` today, so this would be net-new).
 
-## Files touched (all under `bcast-ui/`)
+## Files touched (all under `example_forum/`)
 
 | File | Change |
 |---|---|
 | `src/forum_message.h` (+ `.cpp`?) | **new** — `ForumMessage` + encode/decode |
-| `src/broadcast_app.rep` | new slots/signals; drop `sendMessage`/`messageReceived` |
-| `src/broadcast_app_backend.h` | declare `createTopic`/`replyToTopic`; includes |
-| `src/broadcast_app_backend.cpp` | encode on send, decode on receive, local echo, QUuid |
+| `src/example_forum.rep` | new slots/signals; drop `sendMessage`/`messageReceived` |
+| `src/example_forum_backend.h` | declare `createTopic`/`replyToTopic`; includes |
+| `src/example_forum_backend.cpp` | encode on send, decode on receive, local echo, QUuid |
 | `src/qml/Main.qml` | master-detail forum UI + topics/replies models |
 | `CMakeLists.txt` | add `forum_message.*` to `SOURCES` |

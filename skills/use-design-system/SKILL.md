@@ -124,7 +124,7 @@ Family `publicSans`; weights `weightRegular:400` / `weightMedium:500` /
 
 ```qml
 LogosText {
-    text: "Broadcast Forum"
+    text: "Example Forum"
     font.pixelSize: Theme.typography.panelTitleText
     font.weight: Theme.typography.weightBold
     color: Theme.palette.text

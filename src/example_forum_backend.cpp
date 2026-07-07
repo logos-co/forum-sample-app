@@ -1,4 +1,4 @@
-#include "broadcast_app_backend.h"
+#include "example_forum_backend.h"
 
 #include <iostream>
 
@@ -21,7 +21,7 @@ namespace {
 // One consistently-tagged line per lifecycle hook / delivery event so the
 // backend's activity is easy to spot (and grep) in the host's stderr stream.
 void logEvent(const std::string &what) {
-  std::cerr << "[broadcast_app backend] " << what << std::endl;
+  std::cerr << "[example_forum backend] " << what << std::endl;
 }
 
 // A fresh, collision-free message id (also the topic id, for topics).
@@ -38,19 +38,19 @@ qint64 nowNs() {
 
 // A LIP-23 content topic (https://lip.logos.co/messaging/informational/23/topics.html).
 // Hard-coded so every instance of this app shares one forum.
-const QString BroadcastAppBackend::kTopic =
-    QStringLiteral("/broadcast-app/1/forum/proto");
+const QString ExampleForumBackend::kTopic =
+    QStringLiteral("/example-forum/1/forum/proto");
 
-BroadcastAppBackend::BroadcastAppBackend() {
+ExampleForumBackend::ExampleForumBackend() {
   // Runs in the ui-host process before the context is wired.
   logEvent("ctor — backend constructed (context not yet wired)");
 }
 
-BroadcastAppBackend::~BroadcastAppBackend() {
+ExampleForumBackend::~ExampleForumBackend() {
   logEvent("dtor — backend destroyed");
 }
 
-void BroadcastAppBackend::onContextReady() {
+void ExampleForumBackend::onContextReady() {
   logEvent("onContextReady — context wired, scheduling node bootstrap");
   setTopic(kTopic);
 
@@ -60,7 +60,7 @@ void BroadcastAppBackend::onContextReady() {
   QTimer::singleShot(0, [this]() { bootstrap(); });
 }
 
-void BroadcastAppBackend::bootstrap() {
+void ExampleForumBackend::bootstrap() {
   // --- Subscribe to delivery_module events before starting the node ---------
 
   // Node health: surface connectionStateChanged (Connected / PartiallyConnected
@@ -128,7 +128,7 @@ void BroadcastAppBackend::bootstrap() {
   logEvent("node ready — forum on " + kTopic.toStdString());
 }
 
-QString BroadcastAppBackend::createTopic(QString title, QString body) {
+QString ExampleForumBackend::createTopic(QString title, QString body) {
   if (title.isEmpty())
     return QStringLiteral("A topic needs a title");
 
@@ -140,7 +140,7 @@ QString BroadcastAppBackend::createTopic(QString title, QString body) {
   return publish(msg);
 }
 
-QString BroadcastAppBackend::reconstructTopic(QString topicId, QString title) {
+QString ExampleForumBackend::reconstructTopic(QString topicId, QString title) {
   // Local recovery for a topic we only know through its replies (a backfilled
   // placeholder in the view). The topic id is a hash of the title, so a title
   // shared out-of-band and pasted here is provably the right one iff its hash
@@ -156,7 +156,7 @@ QString BroadcastAppBackend::reconstructTopic(QString topicId, QString title) {
   return QString(); // empty == success
 }
 
-QString BroadcastAppBackend::replyToTopic(QString topicId, QString body) {
+QString ExampleForumBackend::replyToTopic(QString topicId, QString body) {
   if (topicId.isEmpty())
     return QStringLiteral("No topic selected");
   if (body.isEmpty())
@@ -170,7 +170,7 @@ QString BroadcastAppBackend::replyToTopic(QString topicId, QString body) {
   return publish(msg);
 }
 
-QString BroadcastAppBackend::publish(const ForumMessage &msg) {
+QString ExampleForumBackend::publish(const ForumMessage &msg) {
   if (!isContextReady() || !nodeReady())
     return QStringLiteral("Node not ready");
 
@@ -188,7 +188,7 @@ QString BroadcastAppBackend::publish(const ForumMessage &msg) {
   return QString(); // empty == success
 }
 
-void BroadcastAppBackend::emitForumMessage(const ForumMessage &msg,
+void ExampleForumBackend::emitForumMessage(const ForumMessage &msg,
                                            qint64 timestamp) {
   if (msg.type == QLatin1String("topic"))
     emit topicReceived(msg.id, msg.title, msg.body, timestamp);

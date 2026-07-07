@@ -1,4 +1,4 @@
-class BroadcastApp
+class ExampleForum
 {
     // Create a new forum topic, broadcast on the shared delivery topic.
     // Returns an empty string on success, or an error description on failure.

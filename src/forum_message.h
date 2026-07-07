@@ -7,7 +7,7 @@
  * @brief A single forum message carried over the broadcast topic.
  *
  * All forum traffic — topic creations and replies — shares the one delivery
- * content topic (BroadcastAppBackend::kTopic). Each message is a small JSON
+ * content topic (ExampleForumBackend::kTopic). Each message is a small JSON
  * envelope whose `type` distinguishes a new topic from a reply, and whose
  * `id`/`topicId` thread replies under their topic.
  *

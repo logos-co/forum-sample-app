@@ -1,6 +1,6 @@
 ---
 name: use-another-module
-description: Make one Logos module call (and subscribe to events from) another — declaring the dependency in metadata.json + flake.nix and reaching it through the generated typed `modules().<dep>` wrapper. Covers all three authoring flavors (universal core, universal ui_qml, explicit ui_qml plugin). Use when a module needs to invoke another module's methods/events (e.g. bcast-ui using delivery_module, forum_ui using forum_app).
+description: Make one Logos module call (and subscribe to events from) another — declaring the dependency in metadata.json + flake.nix and reaching it through the generated typed `modules().<dep>` wrapper. Covers all three authoring flavors (universal core, universal ui_qml, explicit ui_qml plugin). Use when a module needs to invoke another module's methods/events (e.g. example_forum using delivery_module, forum_ui using forum_app).
 ---
 
 # Use another module as a dependency
@@ -41,7 +41,7 @@ The builder matches each `dependencies` entry to the like-named `flakeInputs`
 attribute. Building your module generates the wrapper from the dependency's
 LIDL — it does **not** build the dependency's plugin (see the developer guide's
 "dependency interfaces" section). Examples: [forum-ui/flake.nix](../../forum-ui/flake.nix)
-(`path:` input), [bcast-ui/flake.nix](../../bcast-ui/flake.nix) (pinned GitHub).
+(`path:` input), [flake.nix](../../flake.nix) (pinned GitHub).
 
 ## Reaching the dependency in code
 

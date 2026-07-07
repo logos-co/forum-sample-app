@@ -11,10 +11,10 @@ Item {
     // One consistently-tagged line per QML lifecycle / callback. console.log is
     // routed to stderr by Qt's default message handler, so these land in the
     // same stream as the C++ backend's std::cerr lines.
-    function log(msg) { console.log("[broadcast_app qml] " + msg); }
+    function log(msg) { console.log("[example_forum qml] " + msg); }
 
     // Typed replica — auto-synced properties and callable slots.
-    readonly property var backend: logos.module("broadcast_app")
+    readonly property var backend: logos.module("example_forum")
     property bool ready: false
 
     // Monospace family for code-like values (the topic id). The design system
@@ -42,7 +42,7 @@ Item {
     Connections {
         target: logos
         function onViewModuleReadyChanged(moduleName, isReady) {
-            if (moduleName === "broadcast_app")
+            if (moduleName === "example_forum")
                 root.ready = isReady && root.backend !== null;
         }
     }
@@ -64,7 +64,7 @@ Item {
 
     Component.onCompleted: {
         log("Component.onCompleted — view created");
-        root.ready = root.backend !== null && logos.isViewModuleReady("broadcast_app");
+        root.ready = root.backend !== null && logos.isViewModuleReady("example_forum");
     }
     Component.onDestruction: log("Component.onDestruction — view torn down")
 
@@ -257,7 +257,7 @@ Item {
 
         // Header
         LogosText {
-            text: "Broadcast Forum"
+            text: "Example Forum"
             font.pixelSize: Theme.typography.panelTitleText
             font.weight: Theme.typography.weightBold
             color: Theme.palette.text

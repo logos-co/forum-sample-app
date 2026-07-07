@@ -28,7 +28,7 @@ pieces fit together:
 
 ## Running a module: Basecamp (portable lgx) vs `nix run` (standalone)
 
-Both ways of running a ui_qml/backend module (e.g. `bcast-ui`) use the **same
+Both ways of running a ui_qml/backend module (e.g. `example_forum`) use the **same
 view-module runtime mechanics**. `repos/logos-view-module-runtime` is a *shared*
 static library + `ui-host` binary that **both** `logos-basecamp` and
 `logos-standalone-app` link. So in either case the backend plugin

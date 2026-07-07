@@ -27,7 +27,7 @@ is overloaded, so keep them apart:
 | Who loads it | `liblogos_core` C API (`logos_core_load_module*`) | Basecamp via `QPluginLoader` / `QQuickWidget` |
 | Has UI? | No — headless background service | Yes — appears as an MDI tab |
 | Auth | UUID capability tokens | Calls backends through tokens like anyone else |
-| Examples | `package_manager`, `capability_module`, `waku_module` | `package_manager_ui`, `broadcast_app` |
+| Examples | `package_manager`, `capability_module`, `waku_module` | `package_manager_ui`, `example_forum` |
 
 ```
 ┌─ Basecamp Process ───────────────────────────────────────────┐
@@ -65,7 +65,7 @@ several authoring styles, all selected by `metadata.json`:
 
 `metadata.json` is the source of truth for `name`, `version`, `type`
 (`module` vs `ui_qml`), `interface`, `dependencies`, `view`, and `codegen.rep`.
-Example: [bcast-ui/metadata.json](bcast-ui/metadata.json).
+Example: [metadata.json](../metadata.json).
 
 ---
 
@@ -108,8 +108,8 @@ impls compile unchanged):
   escapes the provider.
 - **`onContextReady()`** — fires **exactly once**, after the context is wired
   and before any method dispatch. This is the module's "start": open files,
-  prime caches, start timers. (See `BroadcastAppBackend::onContextReady` starting
-  a per-second tick: [bcast-ui/src/broadcast_app_backend.h](bcast-ui/src/broadcast_app_backend.h).)
+  prime caches, start timers. (See `ExampleForumBackend::onContextReady` deferring
+  node bootstrap: [example_forum_backend.cpp](../src/example_forum_backend.cpp).)
 - **Destruction** — Qt child-destruction order tears things down; the provider
   stops emitting, then widgets/objects, then the C API handle.
 
@@ -285,20 +285,20 @@ other view modules.
 └────────────────────────────────┘         └───────────────────────────┘
 ```
 
-### The three authored pieces (see [bcast-ui/src](bcast-ui/src))
+### The three authored pieces (see [src](../src))
 
-1. **`.rep` contract** ([broadcast_app.rep](bcast-ui/src/broadcast_app.rep)) —
+1. **`.rep` contract** ([example_forum.rep](../src/example_forum.rep)) —
    the QtRO interface: `SLOT`s (callable from QML) and `PROP`s (auto-synced to
    every replica). `logos_module(REP_FILE …)` generates a `<Foo>SimpleSource`
    base and a typed source/replica pair.
-2. **C++ backend** ([broadcast_app_backend.h](bcast-ui/src/broadcast_app_backend.h))
+2. **C++ backend** ([example_forum_backend.h](../src/example_forum_backend.h))
    — derives the generated `<Foo>SimpleSource` (implement its slots, feed its
    PROPs via `setXxx(...)`) **and** `LogosUiPluginContext` (gives
    `onContextReady()` + `modules()` for any declared `dependencies`). The
    author writes *only* this class and the `.rep`; the `*Plugin` /
    `*Interface` classes, `Q_PLUGIN_METADATA`, `initLogos`, and QtRO registration
    are generated around it.
-3. **QML view** ([qml/Main.qml](bcast-ui/src/qml/Main.qml)) — declared as
+3. **QML view** ([qml/Main.qml](../src/qml/Main.qml)) — declared as
    `view` in metadata; loaded into a sandboxed `QQuickWidget`.
 
 ### Remoting & data flow

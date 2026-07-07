@@ -1,6 +1,6 @@
 ---
 name: use-delivery-module
-description: Use the Logos delivery_module (liblogosdelivery / Waku messaging) from another module — bootstrap a node, subscribe to a content topic, send a payload, and handle the message events. Covers the createNode config, the synchronous-call + async-event model, and the plain-text send/receive recipe. Use when a module needs to send/receive messages over the Logos messaging network (e.g. bcast-ui broadcasting on a topic).
+description: Use the Logos delivery_module (liblogosdelivery / Waku messaging) from another module — bootstrap a node, subscribe to a content topic, send a payload, and handle the message events. Covers the createNode config, the synchronous-call + async-event model, and the plain-text send/receive recipe. Use when a module needs to send/receive messages over the Logos messaging network (e.g. example_forum broadcasting on a topic).
 ---
 
 # Use the delivery_module
@@ -15,7 +15,7 @@ This is a concrete instance of [use-another-module](../use-another-module/SKILL.
 — read that for the dependency-wiring mechanics. The canonical usage reference is
 [ref-repos/logos-delivery-demo](../../ref-repos/logos-delivery-demo) (a ui_qml demo) and
 the full API in [delivery_module_plugin.h](../../ref-repos/logos-delivery-module/src/delivery_module_plugin.h).
-A worked universal-ui_qml implementation lives in [bcast-ui](../../bcast-ui/src/broadcast_app_backend.cpp).
+A worked universal-ui_qml implementation lives in [example_forum](../../src/example_forum_backend.cpp).
 
 ## Declare the dependency
 
@@ -108,7 +108,7 @@ modules().delivery_module.on("messageReceived", [this](const QVariantList& data)
 > **Version caveat.** The module's README "Events" section describes the
 > `messageReceived` payload as a base64 *string* and timestamps as nanosecond
 > *strings*. The **v0.1.3 demo code** (the tested reference) treats the payload as
-> a `QByteArray` and timestamps as `qint64`. Trust the demo/`bcast-ui` code for
+> a `QByteArray` and timestamps as `qint64`. Trust the demo/`example_forum` code for
 > v0.1.3; re-check positions/types if you bump the pin.
 
 ## Node info
@@ -142,8 +142,8 @@ topic, send from one, and the other fires `messageReceived`:
 
 ```bash
 # standalone harness (single-module), two terminals:
-cd bcast-ui && nix run        # terminal A
-cd bcast-ui && nix run        # terminal B
+cd example_forum && nix run        # terminal A
+cd example_forum && nix run        # terminal B
 # or two Basecamp instances with isolated state:
 ./result/bin/LogosBasecamp --user-dir /tmp/bc-a &
 ./result/bin/LogosBasecamp --user-dir /tmp/bc-b &
