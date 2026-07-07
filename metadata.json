@@ -1,11 +1,11 @@
 {
   "name": "example_forum",
   "display_name": "Example Forum",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "type": "ui_qml",
   "interface": "universal",
   "category": "example",
-  "description": "A C++ UI module (universal backend) with QML view (process-isolated)",
+  "description": "Example Forum App. No login required to post topics/replies. Ephemeral data, no persistence.",
   "main": "example_forum_plugin",
   "icon": null,
   "view": "qml/Main.qml",
