@@ -17,6 +17,12 @@
 #include "logos_sdk.h"
 #include "logos_types.h"
 
+// Injected by CMake from metadata.json#version. Guard so the file still compiles
+// (as an "unknown" version) if the definition is ever missing.
+#ifndef EXAMPLE_FORUM_VERSION
+#define EXAMPLE_FORUM_VERSION "unknown"
+#endif
+
 namespace {
 // One consistently-tagged line per lifecycle hook / delivery event so the
 // backend's activity is easy to spot (and grep) in the host's stderr stream.
@@ -44,6 +50,8 @@ const QString ExampleForumBackend::kTopic =
 ExampleForumBackend::ExampleForumBackend() {
   // Runs in the ui-host process before the context is wired.
   logEvent("ctor — backend constructed (context not yet wired)");
+  // EXAMPLE_FORUM_VERSION is injected by CMake from metadata.json#version.
+  setAppVersion(QStringLiteral(EXAMPLE_FORUM_VERSION));
 }
 
 ExampleForumBackend::~ExampleForumBackend() {

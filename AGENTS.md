@@ -22,6 +22,7 @@ Reusable procedures live in `skills/`. Read the relevant one before the matching
 - [use-another-module](skills/use-another-module/SKILL.md) — make one module call/subscribe to another via the generated `modules().<dep>` wrapper.
 - [use-delivery-module](skills/use-delivery-module/SKILL.md) — send/receive messages over the Logos network using `delivery_module`.
 - [use-design-system](skills/use-design-system/SKILL.md) — use the design system (compatible with basecamp) in a ui module of an app
+- [surface-metadata-in-ui](skills/surface-metadata-in-ui/SKILL.md) — display a metadata.json value (e.g. version) in the QML UI via CMake → compile-def → backend PROP → QML binding.
 
 ## IDE clangd errors
 - [Verify module builds](verify-module-builds.md) — ./ build with `nix build`; IDE clangd errors there are false positives

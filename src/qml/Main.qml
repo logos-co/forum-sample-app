@@ -23,9 +23,10 @@ Item {
     readonly property string monoFont: "monospace"
 
     // PROPs from the .rep file, auto-updated via QtRO.
-    readonly property string status:    backend ? backend.status    : ""
-    readonly property bool   nodeReady: backend ? backend.nodeReady : false
-    readonly property string topic:     backend ? backend.topic     : ""
+    readonly property string status:     backend ? backend.status     : ""
+    readonly property bool   nodeReady:  backend ? backend.nodeReady  : false
+    readonly property string topic:      backend ? backend.topic      : ""
+    readonly property string appVersion: backend ? backend.appVersion : ""
 
     // Currently opened topic (the thread shown on the right), and a transient
     // error line from the last create/reply attempt.
@@ -255,9 +256,9 @@ Item {
         anchors.margins: Theme.spacing.large
         spacing: Theme.spacing.small
 
-        // Header
+        // Header — version is sourced from metadata.json via the backend PROP.
         LogosText {
-            text: "Example Forum"
+            text: "Example Forum" + (root.appVersion.length > 0 ? " v" + root.appVersion : "")
             font.pixelSize: Theme.typography.panelTitleText
             font.weight: Theme.typography.weightBold
             color: Theme.palette.text

@@ -23,6 +23,9 @@ class ExampleForum
     // The hard-coded content topic this forum runs on (for display).
     PROP(QString topic="" READONLY)
 
+    // App version, sourced from metadata.json at build time (for display).
+    PROP(QString appVersion="" READONLY)
+
     // A forum topic arrived on the channel (or was just created locally).
     // `timestamp` is nanoseconds since the Unix epoch.
     SIGNAL(topicReceived(QString id, QString title, QString body, qint64 timestamp))
