@@ -66,9 +66,8 @@ private:
   // block briefly — returning promptly lets the QML replica reach Valid sooner.
   void bootstrap();
 
-  // Opens (or, on first run, creates) this install's accounts_module keystore
-  // and unlocks it, so publish() can sign without a passphrase each call. Sets
-  // m_myAddress / myAddress PROP on success.
+  // Opens (or, on first run, creates) this install's accounts_module keystore.
+  // Sets m_myAddress / m_passphrase / myAddress PROP on success.
   //
   // Layout under identityDir() (an app-private dir this plugin picks itself —
   // ui_qml plugins get no host-provisioned instancePersistencePath, unlike
@@ -83,6 +82,17 @@ private:
   // structural plumbing, not a security boundary. A real secret-at-rest story
   // (OS keychain, user passphrase, etc.) is a follow-up if this identity ever
   // needs to resist a local attacker.
+  //
+  // Does NOT unlock the account — accounts_module holds exactly one keystore
+  // handle for its whole process, shared by every app that depends on it
+  // (same as delivery_module). Any consumer's initKeystore() call — including
+  // ours, on a second bootstrap — closes whatever was previously open and
+  // replaces it (see GoWSK_accounts_keystore_CloseKeyStore in
+  // accounts_module_impl.cpp's initKeystore). An unlock from bootstrap time
+  // has no durable guarantee: another consumer opening its own directory
+  // in between silently locks ours again. publish() works around this by
+  // reopening our directory and signing with the passphrase directly, back
+  // to back, instead of relying on unlock state surviving between calls.
   void ensureIdentity();
 
   // This app's private data directory (not shared with other Logos modules).
@@ -106,4 +116,9 @@ private:
   // Empty until then — publish() gates on this the same way it gates on
   // nodeReady().
   QString m_myAddress;
+
+  // This install's keystore passphrase, kept in memory so publish() can pass
+  // it to keystoreSignHashWithPassphrase() directly rather than depending on
+  // a prior keystoreUnlock() surviving (see ensureIdentity()'s doc comment).
+  QString m_passphrase;
 };

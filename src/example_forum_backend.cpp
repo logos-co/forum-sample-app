@@ -216,13 +216,10 @@ void ExampleForumBackend::ensureIdentity() {
     logEvent("minted new forum identity " + address.toStdString());
   }
 
-  const bool unlocked = modules().accounts_module.keystoreUnlock(address, passphrase, &err);
-  if (!unlocked) {
-    logEvent("keystoreUnlock failed: " + err.message);
-    return;
-  }
-
+  // No keystoreUnlock() here — see the doc comment on ensureIdentity() in the
+  // header for why that state can't be relied on to survive until publish().
   m_myAddress = address;
+  m_passphrase = passphrase;
   setMyAddress(address);
   logEvent("identity ready — signing as " + address.toStdString());
 }
@@ -272,6 +269,15 @@ QString ExampleForumBackend::replyToTopic(QString topicId, QString body) {
 }
 
 QString ExampleForumBackend::publish(ForumMessage msg) {
+  // Unconditional entry log — the two early-return guards below fail closed
+  // and silently (no send, no local echo, so nothing reaches the topics/reply
+  // list), so this is what distinguishes "never got here" from "got here and
+  // one of the guards tripped" when diagnosing a post that doesn't appear.
+  logEvent("publish(" + msg.type.toStdString() + " id=" + msg.id.toStdString() +
+           "): contextReady=" + std::to_string(isContextReady()) +
+           " nodeReady=" + std::to_string(nodeReady()) +
+           " myAddress=" + (m_myAddress.isEmpty() ? "<empty>" : m_myAddress.toStdString()));
+
   if (!isContextReady() || !nodeReady())
     return QStringLiteral("Node not ready");
   if (m_myAddress.isEmpty())
@@ -285,11 +291,23 @@ QString ExampleForumBackend::publish(ForumMessage msg) {
                                                      QCryptographicHash::Keccak_256);
   const QString hashHex = QStringLiteral("0x") + QString::fromLatin1(hash.toHex());
 
-  logos::CallError signErr;
-  msg.sig = modules().accounts_module.keystoreSignHash(m_myAddress, hashHex, &signErr);
+  // Reopen our directory immediately before signing, and sign with the
+  // passphrase directly (keystoreSignHashWithPassphrase), rather than relying
+  // on a keystoreUnlock() from bootstrap time to have survived — accounts_module
+  // shares one keystore handle across every consumer, so anyone else's
+  // initKeystore() call since then would have silently locked us out again.
+  // See ensureIdentity()'s doc comment in the header.
+  logos::CallError err;
+  const QString keystoreDir = identityDir() + QStringLiteral("/keystore");
+  if (!modules().accounts_module.initKeystore(keystoreDir, 4096, 6, &err)) {
+    logEvent("re-initKeystore before sign failed: " + err.message);
+    return QString::fromStdString(err.message);
+  }
+  msg.sig = modules().accounts_module.keystoreSignHashWithPassphrase(
+      m_myAddress, m_passphrase, hashHex, &err);
   if (msg.sig.isEmpty()) {
-    logEvent("sign failed: " + signErr.message);
-    return QString::fromStdString(signErr.message);
+    logEvent("sign failed: " + err.message);
+    return QString::fromStdString(err.message);
   }
 
   LogosResult r = modules().delivery_module.send(kTopic, encodeForumMessage(msg));
