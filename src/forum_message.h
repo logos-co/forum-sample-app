@@ -21,7 +21,16 @@ struct ForumMessage {
   QString topicId; ///< replies only: the topic.id this reply belongs to
   QString title;   ///< topics only
   QString body;    ///< both
+  QString author;  ///< signer's address (0x…), set by publish() before sending
+  QString sig;     ///< signature over forumMessageSigningBytes(msg), set by publish() before sending
 };
+
+// The bytes that get hashed and signed — a frozen canonical form independent
+// of JSON field order, mirroring topicIdFor()'s approach below. Deliberately
+// excludes `author`/`sig` themselves (a signature can't cover its own field).
+// Both signing (publish) and, once a verify path exists, checking a received
+// message must hash exactly these bytes.
+QByteArray forumMessageSigningBytes(const ForumMessage &msg);
 
 // Derive a topic's id from its title, as a content hash (SHA-256 hex over a
 // frozen canonical form of the title). The id is therefore deterministic and

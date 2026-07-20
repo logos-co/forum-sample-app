@@ -26,10 +26,20 @@ class ExampleForum
     // App version, sourced from metadata.json at build time (for display).
     PROP(QString appVersion="" READONLY)
 
-    // A forum topic arrived on the channel (or was just created locally).
-    // `timestamp` is nanoseconds since the Unix epoch.
-    SIGNAL(topicReceived(QString id, QString title, QString body, qint64 timestamp))
+    // This install's signing identity (an accounts_module address), generated
+    // on first run and persisted locally thereafter. Empty until the identity
+    // is ready (composing is gated on this the same way it's gated on
+    // nodeReady — see backend::publish()).
+    PROP(QString myAddress="" READONLY)
 
-    // A reply to topic `topicId` arrived (or was just posted locally).
-    SIGNAL(replyReceived(QString id, QString topicId, QString body, qint64 timestamp))
+    // A forum topic arrived on the channel (or was just created locally).
+    // `author` is the claimed signer's address — NOT cryptographically
+    // verified by this client (accounts_module exposes signing but no
+    // verify/recover call yet), so treat it as a display label, not proof.
+    // `timestamp` is nanoseconds since the Unix epoch.
+    SIGNAL(topicReceived(QString id, QString title, QString body, QString author, qint64 timestamp))
+
+    // A reply to topic `topicId` arrived (or was just posted locally). See
+    // topicReceived for the `author` caveat.
+    SIGNAL(replyReceived(QString id, QString topicId, QString body, QString author, qint64 timestamp))
 }

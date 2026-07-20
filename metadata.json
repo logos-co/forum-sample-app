@@ -5,12 +5,13 @@
   "type": "ui_qml",
   "interface": "universal",
   "category": "example",
-  "description": "Example Forum App. No login required to post topics/replies. Ephemeral data, no persistence.",
+  "description": "Example Forum App. No login required to post topics/replies — posts are signed under a per-install identity generated on first run. Post history itself is ephemeral, not persisted.",
   "main": "example_forum_plugin",
   "icon": null,
   "view": "qml/Main.qml",
   "dependencies": [
-    "delivery_module"
+    "delivery_module",
+    "accounts_module"
   ],
   "codegen": {
     "rep": "src/example_forum.rep"

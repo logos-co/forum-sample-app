@@ -24,12 +24,28 @@ QString topicIdFor(const QString &title) {
           .toHex());
 }
 
+QByteArray forumMessageSigningBytes(const ForumMessage &msg) {
+  // Same frozen-canonical-form technique as topicIdFor() above, so the bytes
+  // that get hashed don't depend on JSON key order/whitespace and stay stable
+  // even if the wire envelope's JSON shape changes later. "v1" tags the form
+  // itself, distinct from the envelope's own `msg.version`.
+  QString canonical = QStringLiteral("v1\n") + msg.type + QLatin1Char('\n') + msg.id;
+  if (msg.type == QLatin1String(kTypeTopic))
+    canonical += QLatin1Char('\n') + msg.title;
+  else if (msg.type == QLatin1String(kTypeReply))
+    canonical += QLatin1Char('\n') + msg.topicId;
+  canonical += QLatin1Char('\n') + msg.body;
+  return canonical.toUtf8();
+}
+
 QByteArray encodeForumMessage(const ForumMessage &msg) {
   QJsonObject obj{
       {"v", msg.version},
       {"type", msg.type},
       {"id", msg.id},
       {"body", msg.body},
+      {"author", msg.author},
+      {"sig", msg.sig},
   };
   // Only carry the field that's meaningful for the type, to keep envelopes lean.
   if (msg.type == QLatin1String(kTypeTopic))
@@ -53,6 +69,11 @@ bool decodeForumMessage(const QByteArray &bytes, ForumMessage &out) {
   m.type = obj.value("type").toString();
   m.id = obj.value("id").toString();
   m.body = obj.value("body").toString();
+  // Absent on messages from a client that predates signing (or a malicious
+  // one) — left empty rather than rejected, since this client has no way to
+  // verify a signature yet either way. See forumMessageSigningBytes().
+  m.author = obj.value("author").toString();
+  m.sig = obj.value("sig").toString();
   if (m.id.isEmpty())
     return false;
 
