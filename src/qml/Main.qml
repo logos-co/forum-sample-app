@@ -27,6 +27,16 @@ Item {
     readonly property bool   nodeReady:  backend ? backend.nodeReady  : false
     readonly property string topic:      backend ? backend.topic      : ""
     readonly property string appVersion: backend ? backend.appVersion : ""
+    readonly property string myAddress:  backend ? backend.myAddress  : ""
+
+    // Short display form for a signer address: first 6 + last 4 hex chars.
+    // `author` is a claimed signer, not a verified one — this app can't check
+    // a signature yet (see example_forum.rep's topicReceived doc comment) —
+    // so this is a label, not a trust indicator.
+    function shortAddress(addr) {
+        if (!addr || addr.length <= 12) return addr || "";
+        return addr.substring(0, 6) + "…" + addr.substring(addr.length - 4);
+    }
 
     // Currently opened topic (the thread shown on the right), and a transient
     // error line from the last create/reply attempt.
@@ -53,13 +63,13 @@ Item {
     Connections {
         target: root.backend
         ignoreUnknownSignals: true
-        function onTopicReceived(id, title, body, timestamp) {
+        function onTopicReceived(id, title, body, author, timestamp) {
             root.log("topicReceived -> " + id);
-            root.addTopic(id, title, body, timestamp);
+            root.addTopic(id, title, body, author, timestamp);
         }
-        function onReplyReceived(id, topicId, body, timestamp) {
+        function onReplyReceived(id, topicId, body, author, timestamp) {
             root.log("replyReceived -> " + id + " on " + topicId);
-            root.addReply(id, topicId, body, timestamp);
+            root.addReply(id, topicId, body, author, timestamp);
         }
     }
 
@@ -101,18 +111,18 @@ Item {
         return n;
     }
 
-    function addTopic(id, title, body, ts) {
+    function addTopic(id, title, body, author, ts) {
         var i = root.findTopicIndex(id);
         if (i >= 0) {
             // Already known. If it's a placeholder we backfilled from an early
             // reply, fill in the real title/body now; otherwise it's a
             // self/network echo and we leave the existing row untouched.
             if (topicsModel.get(i).placeholder)
-                root.fillTopic(i, title, body, ts);
+                root.fillTopic(i, title, body, author, ts);
             return;
         }
         topicsModel.append({
-            tid: id, title: title, body: body,
+            tid: id, title: title, body: body, author: author || "",
             ts: root.formatTs(ts),
             replies: root.countRepliesFor(id),      // catch up any orphan replies
             placeholder: false
@@ -128,6 +138,7 @@ Item {
             tid: topicId,
             title: "⏳ " + topicId.substring(0, 8),
             body: "",
+            author: "",
             ts: root.formatTs(ts),
             replies: 0,
             placeholder: true
@@ -136,9 +147,10 @@ Item {
 
     // Promote the placeholder at row `i` into a real topic, keeping any thread
     // the user has already opened on it in sync.
-    function fillTopic(i, title, body, ts) {
+    function fillTopic(i, title, body, author, ts) {
         topicsModel.setProperty(i, "title", title);
         topicsModel.setProperty(i, "body", body);
+        topicsModel.setProperty(i, "author", author || "");
         topicsModel.setProperty(i, "ts", root.formatTs(ts));
         topicsModel.setProperty(i, "placeholder", false);
         if (topicsModel.get(i).tid === root.selectedTopicId) {
@@ -148,9 +160,9 @@ Item {
         }
     }
 
-    function addReply(id, topicId, body, ts) {
+    function addReply(id, topicId, body, author, ts) {
         if (root.replyExists(id)) return;           // de-dupe
-        repliesModel.append({ rid: id, topicId: topicId, body: body, ts: root.formatTs(ts) });
+        repliesModel.append({ rid: id, topicId: topicId, body: body, author: author || "", ts: root.formatTs(ts) });
 
         // Bump the parent topic's reply count, backfilling a placeholder topic
         // first if the reply arrived before its topic.
@@ -163,7 +175,7 @@ Item {
 
         // If this reply belongs to the open thread, show it immediately.
         if (topicId === root.selectedTopicId)
-            threadModel.append({ rid: id, body: body, ts: root.formatTs(ts) });
+            threadModel.append({ rid: id, body: body, author: author || "", ts: root.formatTs(ts) });
     }
 
     function openTopic(tid) {
@@ -178,7 +190,7 @@ Item {
         for (var j = 0; j < repliesModel.count; ++j) {
             var r = repliesModel.get(j);
             if (r.topicId === tid)
-                threadModel.append({ rid: r.rid, body: r.body, ts: r.ts });
+                threadModel.append({ rid: r.rid, body: r.body, author: r.author, ts: r.ts });
         }
     }
 
@@ -273,6 +285,16 @@ Item {
             text: (root.nodeReady ? "● " : "○ ") + (root.status.length > 0 ? root.status : "Connecting to backend…")
             color: root.nodeReady ? Theme.palette.success : Theme.palette.warning
             font.pixelSize: Theme.typography.secondaryText
+        }
+        LogosText {
+            // Own signing identity — a fresh keypair minted on first run and
+            // persisted locally thereafter (see ensureIdentity() in the backend).
+            text: root.myAddress.length > 0
+                  ? "Posting as " + root.shortAddress(root.myAddress)
+                  : "Preparing identity…"
+            color: Theme.palette.textTertiary
+            font.pixelSize: Theme.typography.secondaryText
+            font.family: root.monoFont
         }
         LogosText {
             visible: root.lastError.length > 0
@@ -390,6 +412,7 @@ Item {
                                     text: model.placeholder
                                           ? model.replies + (model.replies === 1 ? " reply · awaiting topic…" : " replies · awaiting topic…")
                                           : model.replies + (model.replies === 1 ? " reply · " : " replies · ") + model.ts
+                                              + (model.author ? " · by " + root.shortAddress(model.author) : "")
                                     color: Theme.palette.textTertiary
                                     font.pixelSize: Theme.typography.secondaryText
                                     elide: Text.ElideRight
@@ -508,7 +531,7 @@ Item {
                             width: ListView.view ? ListView.view.width : 0
                             spacing: 1
                             LogosText {
-                                text: model.ts
+                                text: model.ts + (model.author ? " · by " + root.shortAddress(model.author) : "")
                                 color: Theme.palette.textTertiary
                                 font.pixelSize: Theme.typography.secondaryText
                                 font.family: root.monoFont
