@@ -33,9 +33,10 @@ Item {
     // `author` is a claimed signer, not a verified one — this app can't check
     // a signature yet (see example_forum.rep's topicReceived doc comment) —
     // so this is a label, not a trust indicator.
+    // shortAddress("{\"address\":\"0xdFcd008F17647543e024d2db17dEDf4B23c4dfC3\"") → "0xdfcd...dfc3"
     function shortAddress(addr) {
         if (!addr || addr.length <= 12) return addr || "";
-        return addr.substring(0, 6) + "…" + addr.substring(addr.length - 4);
+        return addr.substring(12, 18) + "…" + addr.substring(addr.length - 6, addr.length - 2);
     }
 
     // Currently opened topic (the thread shown on the right), and a transient
