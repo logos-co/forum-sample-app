@@ -66,33 +66,28 @@ private:
   // block briefly — returning promptly lets the QML replica reach Valid sooner.
   void bootstrap();
 
-  // Opens (or, on first run, creates) this install's accounts_module keystore.
-  // Sets m_myAddress / m_passphrase / myAddress PROP on success.
+  // Opens (or, on first run, creates) this install's keystore-signer-module identity.
+  // Sets m_keyId / m_credential / myAddress PROP on success.
   //
   // Layout under identityDir() (an app-private dir this plugin picks itself —
   // ui_qml plugins get no host-provisioned instancePersistencePath, unlike
   // core modules):
-  //   keystore/    — accounts_module's encrypted keystore (owned by it)
-  //   passphrase   — random, generated on first run, plaintext on disk
-  //   address      — cached copy of the account address NewAccount returned
+  //   keystore/                      — keystore-signer-module's key storage (owned by it)
+  //   keystore_signer_credential     — 256-bit bearer secret, generated on first run, binary on disk
+  //   key_id                         — hex-encoded key identifier, persisted after key creation
   //
-  // The passphrase is not a user secret — there is no login — it only exists
-  // because accounts_module's keystore API requires one to encrypt-at-rest.
-  // Storing it next to the keystore it unlocks protects against nothing; it's
-  // structural plumbing, not a security boundary. A real secret-at-rest story
-  // (OS keychain, user passphrase, etc.) is a follow-up if this identity ever
-  // needs to resist a local attacker.
+  // The credential is not a user secret — there is no login — it only exists
+  // because keystore-signer-module partitions key namespaces by caller secret.
+  // Storing it next to the keystore it isolates protects against nothing; it's
+  // structural plumbing for per-caller isolation, not a security boundary. A real
+  // secret-at-rest story (OS keychain, user passphrase, etc.) is a follow-up if
+  // this identity ever needs to resist a local attacker.
   //
-  // Does NOT unlock the account — accounts_module holds exactly one keystore
-  // handle for its whole process, shared by every app that depends on it
-  // (same as delivery_module). Any consumer's initKeystore() call — including
-  // ours, on a second bootstrap — closes whatever was previously open and
-  // replaces it (see GoWSK_accounts_keystore_CloseKeyStore in
-  // accounts_module_impl.cpp's initKeystore). An unlock from bootstrap time
-  // has no durable guarantee: another consumer opening its own directory
-  // in between silently locks ours again. publish() works around this by
-  // reopening our directory and signing with the passphrase directly, back
-  // to back, instead of relying on unlock state surviving between calls.
+  // keystore-signer-module automatically isolates each caller's keys by their
+  // credential, so different consumers in the same host process get completely
+  // separate key namespaces. No singleton-lock problems unlike accounts_module.
+  // publish() signs directly with the credential and key_id without re-init
+  // workarounds.
   void ensureIdentity();
 
   // This app's private data directory (not shared with other Logos modules).
@@ -112,13 +107,13 @@ private:
   // the app shares one forum.
   static const QString kTopic;
 
-  // This install's signing address, set once ensureIdentity() completes.
+  // This install's signing key ID (hex-encoded), set once ensureIdentity() completes.
   // Empty until then — publish() gates on this the same way it gates on
-  // nodeReady().
-  QString m_myAddress;
+  // nodeReady(). Displayed to the user via myAddress PROP.
+  QString m_keyId;
 
-  // This install's keystore passphrase, kept in memory so publish() can pass
-  // it to keystoreSignHashWithPassphrase() directly rather than depending on
-  // a prior keystoreUnlock() surviving (see ensureIdentity()'s doc comment).
-  QString m_passphrase;
+  // This install's keystore-signer-module credential (256-bit bearer secret),
+  // kept in memory so publish() can pass it to the signing call directly.
+  // Enables per-caller key isolation in keystore-signer-module.
+  QByteArray m_credential;
 };

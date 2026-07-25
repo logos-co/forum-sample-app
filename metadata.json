@@ -11,7 +11,7 @@
   "view": "qml/Main.qml",
   "dependencies": [
     "delivery_module",
-    "accounts_module"
+    "keystore_signer"
   ],
   "codegen": {
     "rep": "src/example_forum.rep"

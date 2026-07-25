@@ -11,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLatin1String>
+#include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
@@ -18,12 +19,11 @@
 #include <QVariantList>
 
 // Generated umbrella: LogosModules (behind modules()) built from
-// metadata.json#dependencies — the typed `delivery_module` and `accounts_module`
+// metadata.json#dependencies — the typed `delivery_module` and `keystore_signer`
 // wrappers and their typed event accessors. logos_types.h provides LogosResult
 // (delivery_module's return type); logos_call_error.h provides logos::CallError,
-// the out-param error accounts_module's synchronous, direct-return calls use
-// instead (it has no native LogosResult wrapping — see its own std-typed
-// accounts_module_impl.h).
+// the out-param error keystore_signer's synchronous, direct-return calls use
+// instead (it has no native LogosResult wrapping).
 #include "logos_call_error.h"
 #include "logos_sdk.h"
 #include "logos_types.h"
@@ -163,9 +163,8 @@ QString ExampleForumBackend::identityDir() const {
 void ExampleForumBackend::ensureIdentity() {
   const QString dir = identityDir();
   QDir().mkpath(dir);
-  const QString keystoreDir = dir + QStringLiteral("/keystore");
-  const QString passphraseFile = dir + QStringLiteral("/passphrase");
-  const QString addressFile = dir + QStringLiteral("/address");
+  const QString credentialFile = dir + QStringLiteral("/keystore_signer_credential");
+  const QString keyIdFile = dir + QStringLiteral("/key_id");
 
   auto readFile = [](const QString &path) -> QString {
     QFile f(path);
@@ -182,46 +181,48 @@ void ExampleForumBackend::ensureIdentity() {
     return true;
   };
 
-  // accounts_module's calls are direct-return (bool / QString), not wrapped in
-  // LogosResult like delivery_module's — it takes an optional logos::CallError
-  // out-param instead (see logos_call_error.h). Its native accounts_module_impl.h
-  // interface has no Result wrapping of its own, and the generated wrapper
-  // mirrors that.
+  // keystore-signer-module's calls use logos::CallError out-params (same pattern
+  // as the previous accounts_module, but with different API: sign() returns raw
+  // bytes instead of a hex string, and isolation is per-caller secret instead of
+  // per-keystore-handle).
   logos::CallError err;
 
-  const bool opened = modules().accounts_module.initKeystore(keystoreDir, 4096, 6, &err);
-  if (!opened) {
-    logEvent("initKeystore failed: " + err.message);
-    return;
-  }
+  QString credentialHex = readFile(credentialFile);
+  QString keyId = readFile(keyIdFile);
 
-  QString passphrase = readFile(passphraseFile);
-  QString address = readFile(addressFile);
+  if (credentialHex.isEmpty() || keyId.isEmpty()) {
+    // First run for this install — mint a fresh identity. Generate a random
+    // 256-bit credential (32 bytes); it's not a user secret, but isolation plumbing
+    // (see ensureIdentity()'s header doc comment).
+    QByteArray credentialBytes(32, 0);
+    for (int i = 0; i < credentialBytes.size(); ++i)
+      credentialBytes[i] = static_cast<char>(QRandomGenerator::global()->generate() & 0xFF);
+    credentialHex = QString::fromLatin1(credentialBytes.toHex());
 
-  if (passphrase.isEmpty() || address.isEmpty()) {
-    // First run for this install — mint a fresh identity. The passphrase is
-    // not a user secret (see ensureIdentity()'s header comment); it only
-    // exists to satisfy accounts_module's keystore API.
-    passphrase = QUuid::createUuid().toString(QUuid::WithoutBraces) +
-                 QUuid::createUuid().toString(QUuid::WithoutBraces);
-    address = modules().accounts_module.keystoreNewAccount(passphrase, &err);
-    if (address.isEmpty()) {
-      logEvent("keystoreNewAccount failed: " + err.message);
+    keyId = modules().keystore_signer.createKey(credentialBytes,
+                                                QStringLiteral("secp256k1"), &err);
+    if (keyId.isEmpty()) {
+      logEvent("createKey failed: " + err.message);
       return;
     }
-    if (!writeFile(passphraseFile, passphrase) || !writeFile(addressFile, address)) {
+    if (!writeFile(credentialFile, credentialHex) || !writeFile(keyIdFile, keyId)) {
       logEvent("failed to persist identity to " + dir.toStdString());
       return;
     }
-    logEvent("minted new forum identity " + address.toStdString());
+    logEvent("minted new forum identity " + keyId.toStdString());
   }
 
-  // No keystoreUnlock() here — see the doc comment on ensureIdentity() in the
-  // header for why that state can't be relied on to survive until publish().
-  m_myAddress = address;
-  m_passphrase = passphrase;
-  setMyAddress(address);
-  logEvent("identity ready — signing as " + address.toStdString());
+  // Load persisted credential from hex for use in publish().
+  QByteArray credentialBytes = QByteArray::fromHex(credentialHex.toLatin1());
+  if (credentialBytes.isEmpty()) {
+    logEvent("credential file corrupted (invalid hex)");
+    return;
+  }
+
+  m_keyId = keyId;
+  m_credential = credentialBytes;
+  setMyAddress(keyId);
+  logEvent("identity ready — signing as " + keyId.toStdString());
 }
 
 QString ExampleForumBackend::createTopic(QString title, QString body) {
@@ -276,39 +277,33 @@ QString ExampleForumBackend::publish(ForumMessage msg) {
   logEvent("publish(" + msg.type.toStdString() + " id=" + msg.id.toStdString() +
            "): contextReady=" + std::to_string(isContextReady()) +
            " nodeReady=" + std::to_string(nodeReady()) +
-           " myAddress=" + (m_myAddress.isEmpty() ? "<empty>" : m_myAddress.toStdString()));
+           " myKeyId=" + (m_keyId.isEmpty() ? "<empty>" : m_keyId.toStdString()));
 
   if (!isContextReady() || !nodeReady())
     return QStringLiteral("Node not ready");
-  if (m_myAddress.isEmpty())
+  if (m_keyId.isEmpty())
     return QStringLiteral("Identity not ready");
 
   // Sign the canonical payload (Keccak-256, matching go-wallet-sdk's
   // go-ethereum-derived signing convention) before encoding — author/sig must
   // be set on msg itself so encodeForumMessage() carries them on the wire.
-  msg.author = m_myAddress;
-  const QByteArray hash = QCryptographicHash::hash(forumMessageSigningBytes(msg),
-                                                     QCryptographicHash::Keccak_256);
-  const QString hashHex = QStringLiteral("0x") + QString::fromLatin1(hash.toHex());
+  msg.author = m_keyId;
+  const QByteArray signingBytes = forumMessageSigningBytes(msg);
+  const QByteArray hash = QCryptographicHash::hash(signingBytes,
+                                                    QCryptographicHash::Keccak_256);
 
-  // Reopen our directory immediately before signing, and sign with the
-  // passphrase directly (keystoreSignHashWithPassphrase), rather than relying
-  // on a keystoreUnlock() from bootstrap time to have survived — accounts_module
-  // shares one keystore handle across every consumer, so anyone else's
-  // initKeystore() call since then would have silently locked us out again.
-  // See ensureIdentity()'s doc comment in the header.
+  // Sign with keystore-signer-module. Unlike accounts_module, keystore-signer
+  // provides per-caller isolation via the secret credential, so no re-init
+  // workaround is needed. The sign() call returns raw signature bytes (wrapped in QVariant).
   logos::CallError err;
-  const QString keystoreDir = identityDir() + QStringLiteral("/keystore");
-  if (!modules().accounts_module.initKeystore(keystoreDir, 4096, 6, &err)) {
-    logEvent("re-initKeystore before sign failed: " + err.message);
-    return QString::fromStdString(err.message);
-  }
-  msg.sig = modules().accounts_module.keystoreSignHashWithPassphrase(
-      m_myAddress, m_passphrase, hashHex, &err);
-  if (msg.sig.isEmpty()) {
+  const QVariant sigResult = modules().keystore_signer.sign(m_credential, m_keyId, hash, &err);
+  const QByteArray sigBytes = sigResult.toByteArray();
+  if (sigBytes.isEmpty()) {
     logEvent("sign failed: " + err.message);
     return QString::fromStdString(err.message);
   }
+  // Convert signature bytes to hex string for JSON wire format.
+  msg.sig = QStringLiteral("0x") + QString::fromLatin1(sigBytes.toHex());
 
   LogosResult r = modules().delivery_module.send(kTopic, encodeForumMessage(msg));
   if (!r.success) {
