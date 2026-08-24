@@ -29,13 +29,13 @@
  *     every QML replica.
  *   - `LogosUiPluginContext` — gives `onContextReady()` plus `modules()`, the
  *     Qt-typed caller and event subscriptions for the `delivery_module` and
- *     `accounts_module` dependencies declared in metadata.json.
+ *     `keystore_signer` dependencies declared in metadata.json.
  *
  * Posts are signed under a per-install identity: ensureIdentity() creates (or
- * reopens) an accounts_module keystore under this app's local data dir on
- * first bootstrap, and publish() signs every outgoing message with it before
- * sending. See ensureIdentity()'s doc comment for the keystore/passphrase
- * layout and its known limitations.
+ * reopens) a keystore_signer key under this app's local data dir on first
+ * bootstrap, and publish() signs every outgoing message with it before
+ * sending. See ensureIdentity()'s doc comment for the on-disk layout and its
+ * known limitations.
  *
  * The C++ backend runs in its own isolated `ui-host` process; lifecycle hooks
  * and delivery events log to `std::cerr`, visible in the host's stderr stream.
@@ -71,10 +71,17 @@ private:
   //
   // Layout under identityDir() (an app-private dir this plugin picks itself —
   // ui_qml plugins get no host-provisioned instancePersistencePath, unlike
-  // core modules):
-  //   keystore/                      — keystore-signer-module's key storage (owned by it)
-  //   keystore_signer_credential     — 256-bit bearer secret, generated on first run, binary on disk
+  // core modules; keystore-signer-module's own key storage lives in *its*
+  // instancePersistencePath, not here):
+  //   keystore_signer_credential     — 256-bit bearer secret, generated on first run, hex on disk
   //   key_id                         — hex-encoded key identifier, persisted after key creation
+  //
+  // Both files are only meaningful against the keystore they were minted
+  // against, so a reload is validated with keystore_signer.publicKey() and a
+  // fresh identity is minted if that keystore no longer holds the key (e.g.
+  // running against a Basecamp --user-dir whose module_data is new). Losing
+  // the identity means posting under a new author id — recoverable — whereas
+  // keeping a stale one makes every publish() fail to sign.
   //
   // The credential is not a user secret — there is no login — it only exists
   // because keystore-signer-module partitions key namespaces by caller secret.
@@ -90,7 +97,9 @@ private:
   // workarounds.
   void ensureIdentity();
 
-  // This app's private data directory (not shared with other Logos modules).
+  // This app's private data directory (not shared with other Logos modules),
+  // scoped to the Basecamp data tree (LOGOS_USER_DIR) when there is one so the
+  // identity tracks the keystore_signer instance that holds its key.
   QString identityDir() const;
 
   // Encode `msg`, send it on kTopic, then locally echo it (the relay does not

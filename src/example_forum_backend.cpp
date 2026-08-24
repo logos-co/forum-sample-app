@@ -46,6 +46,10 @@ QString newId() {
   return QUuid::createUuid().toString(QUuid::WithoutBraces);
 }
 
+// Length of the keystore_signer bearer credential, in bytes: 256 bits, the
+// minimum secret length keystore_signer accepts.
+constexpr int kCredentialBytes = 32;
+
 // Local-echo timestamp in the same units delivery_module reports for received
 // messages: nanoseconds since the Unix epoch.
 qint64 nowNs() {
@@ -153,9 +157,23 @@ void ExampleForumBackend::bootstrap() {
 }
 
 QString ExampleForumBackend::identityDir() const {
-  // AppDataLocation is keyed off the *host* process's org/app name (the
-  // ui-host, not this plugin), so namespace under it by module name to avoid
-  // colliding with any other Logos module's local data.
+  // Basecamp's --user-dir gives an instance its own data tree (plugins,
+  // modules, module_data, logs) and exports it to every child process — this
+  // backend's ui-host included — as LOGOS_USER_DIR. keystore_signer keeps its
+  // keys inside that tree (<user dir>/module_data/keystore_signer/<instance>),
+  // so our credential + key id have to live there too: an identity stored
+  // outside it is reloaded against a keystore that has never seen its key, and
+  // every sign() then fails. Sit next to the keystore we're bound to.
+  const QString userDir = qEnvironmentVariable("LOGOS_USER_DIR");
+  if (!userDir.isEmpty())
+    return userDir + QStringLiteral("/module_data/example_forum/identity");
+
+  // Default launch (no --user-dir): AppDataLocation is keyed off the *host*
+  // process's org/app name (the ui-host, not this plugin), so namespace under
+  // it by module name to avoid colliding with any other Logos module's local
+  // data. This path doesn't track the keystore's data tree either, but
+  // ensureIdentity() re-mints when the keystore doesn't know the key, so a
+  // mismatch costs an identity rather than every publish().
   return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
          QStringLiteral("/example_forum/identity");
 }
@@ -187,17 +205,40 @@ void ExampleForumBackend::ensureIdentity() {
   // per-keystore-handle).
   logos::CallError err;
 
-  QString credentialHex = readFile(credentialFile);
+  QByteArray credentialBytes = QByteArray::fromHex(readFile(credentialFile).toLatin1());
   QString keyId = readFile(keyIdFile);
 
-  if (credentialHex.isEmpty() || keyId.isEmpty()) {
-    // First run for this install — mint a fresh identity. Generate a random
-    // 256-bit credential (32 bytes); it's not a user secret, but isolation plumbing
-    // (see ensureIdentity()'s header doc comment).
-    QByteArray credentialBytes(32, 0);
+  // A persisted identity is only usable while keystore_signer still holds the
+  // key it names, so check before trusting it — the keystore's storage lives
+  // under the Basecamp user dir (see identityDir()), so it can be a fresh,
+  // empty store while these files still name a key minted against an older
+  // one. publicKey() returns empty bytes for a key id the credential's
+  // namespace doesn't contain; that's the stale case, and re-minting beats
+  // reloading an identity whose every publish() would fail to sign.
+  bool identityUsable = false;
+  if (credentialBytes.size() != kCredentialBytes || keyId.isEmpty()) {
+    // Nothing (or nothing complete) persisted here yet — the first-run path.
+    if (!credentialBytes.isEmpty() || !keyId.isEmpty())
+      logEvent("identity files in " + dir.toStdString() +
+               " are incomplete or corrupt — minting a new identity");
+  } else if (modules()
+                 .keystore_signer.publicKey(credentialBytes, keyId, &err)
+                 .toByteArray()
+                 .isEmpty()) {
+    logEvent("keystore_signer holds no key " + keyId.toStdString() +
+             " for this credential — identity in " + dir.toStdString() +
+             " is stale, minting a new one");
+  } else {
+    identityUsable = true;
+  }
+
+  if (!identityUsable) {
+    // Mint a fresh identity: a random 256-bit credential (32 bytes) plus the
+    // key created under it. The credential isn't a user secret, but isolation
+    // plumbing (see ensureIdentity()'s header doc comment).
+    credentialBytes = QByteArray(kCredentialBytes, 0);
     for (int i = 0; i < credentialBytes.size(); ++i)
       credentialBytes[i] = static_cast<char>(QRandomGenerator::global()->generate() & 0xFF);
-    credentialHex = QString::fromLatin1(credentialBytes.toHex());
 
     keyId = modules().keystore_signer.createKey(credentialBytes,
                                                 QStringLiteral("secp256k1"), &err);
@@ -205,18 +246,12 @@ void ExampleForumBackend::ensureIdentity() {
       logEvent("createKey failed: " + err.message);
       return;
     }
-    if (!writeFile(credentialFile, credentialHex) || !writeFile(keyIdFile, keyId)) {
+    if (!writeFile(credentialFile, QString::fromLatin1(credentialBytes.toHex())) ||
+        !writeFile(keyIdFile, keyId)) {
       logEvent("failed to persist identity to " + dir.toStdString());
       return;
     }
     logEvent("minted new forum identity " + keyId.toStdString());
-  }
-
-  // Load persisted credential from hex for use in publish().
-  QByteArray credentialBytes = QByteArray::fromHex(credentialHex.toLatin1());
-  if (credentialBytes.isEmpty()) {
-    logEvent("credential file corrupted (invalid hex)");
-    return;
   }
 
   m_keyId = keyId;
@@ -299,8 +334,18 @@ QString ExampleForumBackend::publish(ForumMessage msg) {
   const QVariant sigResult = modules().keystore_signer.sign(m_credential, m_keyId, hash, &err);
   const QByteArray sigBytes = sigResult.toByteArray();
   if (sigBytes.isEmpty()) {
-    logEvent("sign failed: " + err.message);
-    return QString::fromStdString(err.message);
+    // keystore_signer reports failure by returning empty bytes, not an error
+    // (its .lidl has no result envelope), so err.message is normally empty
+    // here. Substitute a real description: an empty return would otherwise
+    // reach the view as "" — which the view reads as success — silently
+    // dropping the post instead of showing why it failed.
+    const std::string detail =
+        err.message.empty()
+            ? "keystore_signer returned no signature for key " + m_keyId.toStdString() +
+                  " (is this identity still in its keystore?)"
+            : err.message;
+    logEvent("sign failed: " + detail);
+    return QString::fromStdString("sign failed: " + detail);
   }
   // Convert signature bytes to hex string for JSON wire format.
   msg.sig = QStringLiteral("0x") + QString::fromLatin1(sigBytes.toHex());
