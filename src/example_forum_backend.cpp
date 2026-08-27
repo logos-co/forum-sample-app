@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QIODevice>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLatin1String>
@@ -54,6 +55,38 @@ constexpr int kCredentialBytes = 32;
 // messages: nanoseconds since the Unix epoch.
 qint64 nowNs() {
   return QDateTime::currentMSecsSinceEpoch() * 1000000LL;
+}
+
+// Account bookkeeping timestamp: milliseconds since the Unix epoch. Human
+// scale, and deliberately not the ns units delivery_module stamps messages
+// with — these two never mix.
+qint64 nowMs() {
+  return QDateTime::currentMSecsSinceEpoch();
+}
+
+// Schema version stamped into accounts.json, so a future layout change can be
+// recognised rather than silently misparsed.
+constexpr int kAccountsVersion = 1;
+
+// The signing algorithm every account's key is minted with.
+const QLatin1String kKeyAlgorithm("secp256k1");
+
+// Small text-file helpers: the identity files are all short, single-value
+// documents, and both the credential and accounts.json need reading/writing.
+QString readTextFile(const QString &path) {
+  QFile f(path);
+  if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+    return QString();
+  return QString::fromUtf8(f.readAll()).trimmed();
+}
+
+bool writeTextFile(const QString &path, const QString &contents) {
+  QFile f(path);
+  if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+    return false;
+  QTextStream out(&f);
+  out << contents;
+  return true;
 }
 } // namespace
 
@@ -114,10 +147,10 @@ void ExampleForumBackend::bootstrap() {
         emitForumMessage(msg, data.at(3).toLongLong());
       });
 
-  // --- Open/create this install's signing identity ---------------------------
+  // --- Open/create this install's signing accounts ---------------------------
   // Independent of the delivery node below; publish() gates on both being
-  // ready (nodeReady() and a non-empty m_myAddress).
-  ensureIdentity();
+  // ready (nodeReady() and a selected account).
+  loadAccounts();
 
   // --- Create + start the node against the logos.test fleet -----------------
   // No ports specified: delivery_module defaults them to 0, so the OS assigns
@@ -161,7 +194,7 @@ QString ExampleForumBackend::identityDir() const {
   // modules, module_data, logs) and exports it to every child process — this
   // backend's ui-host included — as LOGOS_USER_DIR. keystore_signer keeps its
   // keys inside that tree (<user dir>/module_data/keystore_signer/<instance>),
-  // so our credential + key id have to live there too: an identity stored
+  // so our credential + accounts have to live there too: an account stored
   // outside it is reloaded against a keystore that has never seen its key, and
   // every sign() then fails. Sit next to the keystore we're bound to.
   const QString userDir = qEnvironmentVariable("LOGOS_USER_DIR");
@@ -172,91 +205,346 @@ QString ExampleForumBackend::identityDir() const {
   // process's org/app name (the ui-host, not this plugin), so namespace under
   // it by module name to avoid colliding with any other Logos module's local
   // data. This path doesn't track the keystore's data tree either, but
-  // ensureIdentity() re-mints when the keystore doesn't know the key, so a
-  // mismatch costs an identity rather than every publish().
+  // loadAccounts() reconciles against the keystore, so a mismatch costs the
+  // account labels rather than every publish().
   return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
          QStringLiteral("/example_forum/identity");
 }
 
-void ExampleForumBackend::ensureIdentity() {
+bool ExampleForumBackend::ensureCredential() {
   const QString dir = identityDir();
   QDir().mkpath(dir);
-  const QString credentialFile = dir + QStringLiteral("/keystore_signer_credential");
-  const QString keyIdFile = dir + QStringLiteral("/key_id");
+  const QString credentialFile =
+      dir + QStringLiteral("/keystore_signer_credential");
 
-  auto readFile = [](const QString &path) -> QString {
-    QFile f(path);
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
-      return QString();
-    return QString::fromUtf8(f.readAll()).trimmed();
-  };
-  auto writeFile = [](const QString &path, const QString &contents) -> bool {
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
-      return false;
-    QTextStream out(&f);
-    out << contents;
+  QByteArray credential =
+      QByteArray::fromHex(readTextFile(credentialFile).toLatin1());
+  if (credential.size() == kCredentialBytes) {
+    m_credential = credential;
     return true;
-  };
+  }
+  if (!credential.isEmpty())
+    logEvent("credential in " + dir.toStdString() +
+             " is malformed — generating a new one");
 
-  // keystore-signer-module's calls use logos::CallError out-params (same pattern
-  // as the previous accounts_module, but with different API: sign() returns raw
-  // bytes instead of a hex string, and isolation is per-caller secret instead of
-  // per-keystore-handle).
-  logos::CallError err;
+  // A random 256-bit credential. Not a user secret, but isolation plumbing
+  // (see loadAccounts()'s header doc comment). Replacing it means a brand-new
+  // keystore namespace, so any accounts.json beside it reconciles to empty and
+  // a fresh account is minted below — the same outcome as a first run.
+  credential = QByteArray(kCredentialBytes, 0);
+  for (int i = 0; i < credential.size(); ++i)
+    credential[i] =
+        static_cast<char>(QRandomGenerator::global()->generate() & 0xFF);
 
-  QByteArray credentialBytes = QByteArray::fromHex(readFile(credentialFile).toLatin1());
-  QString keyId = readFile(keyIdFile);
+  if (!writeTextFile(credentialFile,
+                     QString::fromLatin1(credential.toHex()))) {
+    logEvent("failed to persist credential to " + dir.toStdString());
+    return false;
+  }
+  m_credential = credential;
+  return true;
+}
 
-  // A persisted identity is only usable while keystore_signer still holds the
-  // key it names, so check before trusting it — the keystore's storage lives
-  // under the Basecamp user dir (see identityDir()), so it can be a fresh,
-  // empty store while these files still name a key minted against an older
-  // one. publicKey() returns empty bytes for a key id the credential's
-  // namespace doesn't contain; that's the stale case, and re-minting beats
-  // reloading an identity whose every publish() would fail to sign.
-  bool identityUsable = false;
-  if (credentialBytes.size() != kCredentialBytes || keyId.isEmpty()) {
-    // Nothing (or nothing complete) persisted here yet — the first-run path.
-    if (!credentialBytes.isEmpty() || !keyId.isEmpty())
-      logEvent("identity files in " + dir.toStdString() +
-               " are incomplete or corrupt — minting a new identity");
-  } else if (modules()
-                 .keystore_signer.publicKey(credentialBytes, keyId, &err)
-                 .isEmpty()) {
-    logEvent("keystore_signer holds no key " + keyId.toStdString() +
-             " for this credential — identity in " + dir.toStdString() +
-             " is stale, minting a new one");
+void ExampleForumBackend::loadAccounts() {
+  if (!ensureCredential())
+    return; // no credential, no accounts — publish() reports "Identity not ready"
+
+  const QString dir = identityDir();
+  const QString accountsFile = dir + QStringLiteral("/accounts.json");
+
+  // --- What we last persisted: the labels and the selection -----------------
+  // The keystore holds the keys but knows nothing about names or which one the
+  // user was posting under, so that half comes from disk.
+  QVector<Account> persisted;
+  QString selected;
+  const QJsonDocument doc =
+      QJsonDocument::fromJson(readTextFile(accountsFile).toUtf8());
+  if (doc.isObject()) {
+    const QJsonObject obj = doc.object();
+    selected = obj.value(QStringLiteral("selected")).toString();
+    const QJsonArray stored = obj.value(QStringLiteral("accounts")).toArray();
+    for (const QJsonValue &value : stored) {
+      const QJsonObject entry = value.toObject();
+      Account acct;
+      acct.keyId = entry.value(QStringLiteral("keyId")).toString();
+      acct.label = entry.value(QStringLiteral("label")).toString();
+      acct.createdAt = static_cast<qint64>(
+          entry.value(QStringLiteral("createdAt")).toDouble());
+      if (!acct.keyId.isEmpty())
+        persisted.append(acct);
+    }
   } else {
-    identityUsable = true;
+    // No accounts.json. A pre-accounts install still has the single key_id
+    // file, so adopt that key as the first account — minting a second identity
+    // beside one the user has already been posting under would silently change
+    // their author id. The legacy file is left alone from here on.
+    const QString legacyKeyId = readTextFile(dir + QStringLiteral("/key_id"));
+    if (!legacyKeyId.isEmpty()) {
+      Account acct;
+      acct.keyId = legacyKeyId;
+      acct.label = QStringLiteral("Account 1");
+      acct.createdAt = nowMs();
+      persisted.append(acct);
+      selected = legacyKeyId;
+      logEvent("migrating legacy identity " + legacyKeyId.toStdString() +
+               " into accounts.json");
+    }
   }
 
-  if (!identityUsable) {
-    // Mint a fresh identity: a random 256-bit credential (32 bytes) plus the
-    // key created under it. The credential isn't a user secret, but isolation
-    // plumbing (see ensureIdentity()'s header doc comment).
-    credentialBytes = QByteArray(kCredentialBytes, 0);
-    for (int i = 0; i < credentialBytes.size(); ++i)
-      credentialBytes[i] = static_cast<char>(QRandomGenerator::global()->generate() & 0xFF);
+  // --- Reconcile against the keystore, which owns the real key set ----------
+  logos::CallError err;
+  const QStringList live =
+      modules().keystore_signer.listKeys(m_credential, &err);
 
-    keyId = modules().keystore_signer.createKey(credentialBytes,
-                                                QStringLiteral("secp256k1"), &err);
-    if (keyId.isEmpty()) {
-      logEvent("createKey failed: " + err.message);
-      return;
+  m_accounts.clear();
+  if (!err.ok()) {
+    // The *call* failed, as opposed to reporting an empty namespace, so `live`
+    // says nothing about what exists. Trusting it would drop every account on
+    // a transient keystore hiccup, so validate each persisted account
+    // individually instead — the same publicKey() probe the single-identity
+    // path used, just applied per account.
+    logEvent("listKeys failed (" + err.code + ": " + err.message +
+             ") — validating persisted accounts individually");
+    for (const Account &acct : persisted) {
+      logos::CallError probe;
+      if (!modules()
+               .keystore_signer.publicKey(m_credential, acct.keyId, &probe)
+               .isEmpty())
+        m_accounts.append(acct);
+      else
+        logEvent("dropping account " + acct.keyId.toStdString() +
+                 " — keystore holds no such key");
     }
-    if (!writeFile(credentialFile, QString::fromLatin1(credentialBytes.toHex())) ||
-        !writeFile(keyIdFile, keyId)) {
-      logEvent("failed to persist identity to " + dir.toStdString());
-      return;
+  } else {
+    // Keys that still exist keep their persisted label and order...
+    for (const Account &acct : persisted) {
+      if (live.contains(acct.keyId))
+        m_accounts.append(acct);
+      else
+        logEvent("dropping account " + acct.keyId.toStdString() +
+                 " — keystore no longer holds it");
     }
-    logEvent("minted new forum identity " + keyId.toStdString());
+    // ...and keys the keystore holds that we have no record of get adopted, so
+    // a lost or corrupt accounts.json heals into labelled accounts instead of
+    // stranding usable keys and minting duplicates next to them.
+    for (const QString &keyId : live) {
+      if (indexOfAccount(keyId) >= 0)
+        continue;
+      Account acct;
+      acct.keyId = keyId;
+      acct.label = defaultAccountLabel();
+      acct.createdAt = nowMs();
+      m_accounts.append(acct);
+      logEvent("adopted unlabelled keystore key " + keyId.toStdString() +
+               " as \"" + acct.label.toStdString() + "\"");
+    }
   }
+
+  // --- First run, or nothing survived: mint the starting account ------------
+  if (m_accounts.isEmpty()) {
+    QString keyId;
+    const QString error = mintAccount(defaultAccountLabel(), &keyId);
+    if (!error.isEmpty()) {
+      logEvent("could not mint a first account: " + error.toStdString());
+      return; // m_keyId stays empty; publish() fails closed on it
+    }
+    selected = keyId;
+  }
+
+  // publishAccountState() re-points the selection if `selected` names an
+  // account that didn't survive reconciliation.
+  m_keyId = selected;
+  publishAccountState();
+  saveAccounts();
+  logEvent("accounts ready — " + std::to_string(m_accounts.size()) +
+           " account(s), signing as " + m_keyId.toStdString());
+}
+
+QString ExampleForumBackend::mintAccount(const QString &label,
+                                         QString *outKeyId) {
+  logos::CallError err;
+  const QString keyId =
+      modules().keystore_signer.createKey(m_credential, kKeyAlgorithm, &err);
+  if (keyId.isEmpty()) {
+    // Same empty-return convention as sign() (see publish()): keystore_signer
+    // has no result envelope, so err is normally blank even on failure.
+    // Substitute a description rather than letting "" reach the view, which
+    // reads "" as success.
+    const std::string detail =
+        err.message.empty() ? std::string("keystore_signer returned no key id")
+                            : err.message;
+    logEvent("createKey failed: " + detail);
+    return QString::fromStdString("Couldn't create account: " + detail);
+  }
+
+  Account acct;
+  acct.keyId = keyId;
+  acct.label = label;
+  acct.createdAt = nowMs();
+  m_accounts.append(acct);
+  if (outKeyId)
+    *outKeyId = keyId;
+  logEvent("minted account " + keyId.toStdString() + " (\"" +
+           label.toStdString() + "\")");
+  return QString();
+}
+
+bool ExampleForumBackend::saveAccounts() {
+  QJsonArray stored;
+  for (const Account &acct : m_accounts) {
+    QJsonObject entry;
+    entry.insert(QStringLiteral("keyId"), acct.keyId);
+    entry.insert(QStringLiteral("label"), acct.label);
+    entry.insert(QStringLiteral("createdAt"), acct.createdAt);
+    stored.append(entry);
+  }
+  QJsonObject root;
+  root.insert(QStringLiteral("version"), kAccountsVersion);
+  root.insert(QStringLiteral("selected"), m_keyId);
+  root.insert(QStringLiteral("accounts"), stored);
+
+  const QString path = identityDir() + QStringLiteral("/accounts.json");
+  if (!writeTextFile(path, QString::fromUtf8(QJsonDocument(root).toJson(
+                               QJsonDocument::Indented)))) {
+    // In-memory state stands, so the session keeps working — only the
+    // selection and labels are lost on the next start.
+    logEvent("failed to persist accounts to " + path.toStdString());
+    return false;
+  }
+  return true;
+}
+
+void ExampleForumBackend::publishAccountState() {
+  // m_keyId must always name a held account, or be empty when there are none.
+  // Every mutation lands here, so this is the one place that re-establishes
+  // that invariant — including after a delete removed the selected account.
+  if (indexOfAccount(m_keyId) < 0)
+    m_keyId = m_accounts.isEmpty() ? QString() : m_accounts.first().keyId;
+
+  QJsonArray view;
+  for (const Account &acct : m_accounts) {
+    QJsonObject entry;
+    entry.insert(QStringLiteral("keyId"), acct.keyId);
+    entry.insert(QStringLiteral("label"), acct.label);
+    view.append(entry);
+  }
+  setAccountsJson(QString::fromUtf8(
+      QJsonDocument(view).toJson(QJsonDocument::Compact)));
+
+  const int selectedIndex = indexOfAccount(m_keyId);
+  setMyLabel(selectedIndex >= 0 ? m_accounts.at(selectedIndex).label
+                                : QString());
+  // myAddress last: the view gates composing on it, so it should only go
+  // non-empty once the list and label it refers to are already published.
+  setMyAddress(m_keyId);
+}
+
+int ExampleForumBackend::indexOfAccount(const QString &keyId) const {
+  if (keyId.isEmpty())
+    return -1;
+  for (int i = 0; i < m_accounts.size(); ++i)
+    if (m_accounts.at(i).keyId == keyId)
+      return i;
+  return -1;
+}
+
+QString ExampleForumBackend::defaultAccountLabel() const {
+  // Count up from the current size, skipping names already in use so deleting
+  // "Account 2" of three doesn't hand the next account a name that's still on
+  // screen. At most m_accounts.size() names are taken, so this terminates.
+  for (int n = m_accounts.size() + 1;; ++n) {
+    const QString candidate = QStringLiteral("Account %1").arg(n);
+    bool taken = false;
+    for (const Account &acct : m_accounts) {
+      if (acct.label == candidate) {
+        taken = true;
+        break;
+      }
+    }
+    if (!taken)
+      return candidate;
+  }
+}
+
+QString ExampleForumBackend::createAccount(QString label) {
+  if (m_credential.isEmpty())
+    return QStringLiteral("Accounts aren't ready yet");
+
+  label = label.trimmed();
+  if (label.isEmpty())
+    label = defaultAccountLabel();
+
+  QString keyId;
+  const QString error = mintAccount(label, &keyId);
+  if (!error.isEmpty())
+    return error;
+
+  // Select what was just created — creating an account and then continuing to
+  // post as the old one would be surprising.
+  m_keyId = keyId;
+  publishAccountState();
+  saveAccounts();
+  return QString(); // empty == success
+}
+
+QString ExampleForumBackend::selectAccount(QString keyId) {
+  if (indexOfAccount(keyId) < 0)
+    return QStringLiteral("No such account");
+  if (keyId == m_keyId)
+    return QString(); // already signing as this one
 
   m_keyId = keyId;
-  m_credential = credentialBytes;
-  setMyAddress(keyId);
-  logEvent("identity ready — signing as " + keyId.toStdString());
+  publishAccountState();
+  saveAccounts();
+  logEvent("selected account " + keyId.toStdString());
+  return QString();
+}
+
+QString ExampleForumBackend::renameAccount(QString keyId, QString label) {
+  const int index = indexOfAccount(keyId);
+  if (index < 0)
+    return QStringLiteral("No such account");
+  label = label.trimmed();
+  if (label.isEmpty())
+    return QStringLiteral("An account needs a name");
+
+  // Display metadata only — the key is untouched, so this changes neither what
+  // was signed before nor what can be signed after.
+  m_accounts[index].label = label;
+  publishAccountState();
+  saveAccounts();
+  return QString();
+}
+
+QString ExampleForumBackend::deleteAccount(QString keyId) {
+  const int index = indexOfAccount(keyId);
+  if (index < 0)
+    return QStringLiteral("No such account");
+  if (m_accounts.size() == 1)
+    return QStringLiteral("Can't delete your only account");
+
+  // Destroy the key first: dropping the account while the keystore still held
+  // its key would strand a usable key that the next reconcile would silently
+  // re-adopt as an unlabelled account.
+  logos::CallError err;
+  const bool deleted =
+      modules().keystore_signer.deleteKey(m_credential, keyId, &err);
+  if (!deleted || !err.ok()) {
+    const std::string detail =
+        err.message.empty()
+            ? "keystore_signer did not delete key " + keyId.toStdString()
+            : err.message;
+    logEvent("deleteKey failed: " + detail);
+    return QString::fromStdString("Couldn't delete account: " + detail);
+  }
+
+  const std::string label = m_accounts.at(index).label.toStdString();
+  m_accounts.removeAt(index);
+  // publishAccountState() re-selects when this was the selected account.
+  publishAccountState();
+  saveAccounts();
+  logEvent("deleted account " + keyId.toStdString() + " (\"" + label + "\")");
+  return QString();
 }
 
 QString ExampleForumBackend::createTopic(QString title, QString body) {

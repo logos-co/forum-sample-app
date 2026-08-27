@@ -13,6 +13,31 @@ class ExampleForum
     // topicReceived (no network send). Returns "" on success, else an error.
     SLOT(QString reconstructTopic(QString topicId, QString title))
 
+    // ── Accounts ──────────────────────────────────────────────────────────────
+    // A user may hold several signing identities ("accounts"); exactly one is
+    // selected at a time and signs everything posted from here on. Each is a
+    // keystore_signer key minted under this install's single credential, so the
+    // keystore itself is the source of truth for which accounts exist (their
+    // labels are app-side metadata). Every slot below returns "" on success or
+    // an error description, and each one that mutates state re-publishes
+    // myAddress / myLabel / accountsJson together.
+
+    // Mint a new account and select it. `label` may be empty, in which case a
+    // default ("Account N") is generated.
+    SLOT(QString createAccount(QString label))
+
+    // Switch the signing identity to an existing account. Posts already shown
+    // keep the author they were signed with; only new posts use the new key.
+    SLOT(QString selectAccount(QString keyId))
+
+    // Rename an account. Labels are display metadata only — the key is untouched.
+    SLOT(QString renameAccount(QString keyId, QString label))
+
+    // Permanently destroy an account's key. Irreversible: nothing signed by it
+    // can be signed again. Refused for the last remaining account; deleting the
+    // selected one falls the selection back to another.
+    SLOT(QString deleteAccount(QString keyId))
+
     // Human-readable node/connection status: bootstrap progress first, then
     // delivery_module's connectionStateChanged values (Connected / … ).
     PROP(QString status="Starting…" READONLY)
@@ -26,16 +51,28 @@ class ExampleForum
     // App version, sourced from metadata.json at build time (for display).
     PROP(QString appVersion="" READONLY)
 
-    // This install's signing identity (an accounts_module address), generated
-    // on first run and persisted locally thereafter. Empty until the identity
-    // is ready (composing is gated on this the same way it's gated on
-    // nodeReady — see backend::publish()).
+    // The selected account's keystore_signer key id — the identity every post
+    // is signed under. Minted on first run and persisted locally thereafter.
+    // Empty until an account is ready (composing is gated on this the same way
+    // it's gated on nodeReady — see backend::publish()).
     PROP(QString myAddress="" READONLY)
 
+    // The selected account's display label (e.g. "Account 1"). App-side
+    // metadata, kept alongside the key id; empty until an account is ready.
+    PROP(QString myLabel="" READONLY)
+
+    // Every account this install holds, as a JSON array ordered oldest-first:
+    //   [{"keyId":"…","label":"…"}, …]
+    // JSON because a .rep SLOT returns a single value and a remoted model would
+    // mean a QAbstractListModel plus role registration for a handful of rows.
+    // Re-published as a whole on every create/select/rename/delete, so the view
+    // can rebuild its list from it without polling.
+    PROP(QString accountsJson="[]" READONLY)
+
     // A forum topic arrived on the channel (or was just created locally).
-    // `author` is the claimed signer's address — NOT cryptographically
-    // verified by this client (accounts_module exposes signing but no
-    // verify/recover call yet), so treat it as a display label, not proof.
+    // `author` is the claimed signer's key id — NOT cryptographically verified
+    // by this client (keystore_signer exposes signing but no verify/recover
+    // call yet), so treat it as a display label, not proof.
     // `timestamp` is nanoseconds since the Unix epoch.
     SIGNAL(topicReceived(QString id, QString title, QString body, QString author, qint64 timestamp))
 
