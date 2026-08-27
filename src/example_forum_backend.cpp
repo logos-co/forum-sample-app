@@ -223,7 +223,6 @@ void ExampleForumBackend::ensureIdentity() {
                " are incomplete or corrupt — minting a new identity");
   } else if (modules()
                  .keystore_signer.publicKey(credentialBytes, keyId, &err)
-                 .toByteArray()
                  .isEmpty()) {
     logEvent("keystore_signer holds no key " + keyId.toStdString() +
              " for this credential — identity in " + dir.toStdString() +
@@ -329,10 +328,10 @@ QString ExampleForumBackend::publish(ForumMessage msg) {
 
   // Sign with keystore-signer-module. Unlike accounts_module, keystore-signer
   // provides per-caller isolation via the secret credential, so no re-init
-  // workaround is needed. The sign() call returns raw signature bytes (wrapped in QVariant).
+  // workaround is needed. The sign() call returns raw signature bytes.
   logos::CallError err;
-  const QVariant sigResult = modules().keystore_signer.sign(m_credential, m_keyId, hash, &err);
-  const QByteArray sigBytes = sigResult.toByteArray();
+  const QByteArray sigBytes =
+      modules().keystore_signer.sign(m_credential, m_keyId, hash, &err);
   if (sigBytes.isEmpty()) {
     // keystore_signer reports failure by returning empty bytes, not an error
     // (its .lidl has no result envelope), so err.message is normally empty
