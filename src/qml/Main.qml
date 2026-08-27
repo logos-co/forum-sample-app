@@ -78,6 +78,11 @@ Item {
             root.log("replyReceived -> " + id + " on " + topicId);
             root.addReply(id, topicId, body, author, timestamp);
         }
+        function onMessageStateChanged(id, state, detail) {
+            root.log("messageStateChanged -> " + id + " " + state
+                     + (detail.length > 0 ? " (" + detail + ")" : ""));
+            root.setMessageState(id, state, detail);
+        }
     }
 
     Component.onCompleted: {
@@ -91,8 +96,10 @@ Item {
 
     // ── Models ────────────────────────────────────────────────────────────────
     // Flat topic + reply stores, plus the reply list for the open topic.
-    ListModel { id: topicsModel }   // { tid, title, body, ts, replies }
-    ListModel { id: repliesModel }  // { rid, topicId, body, ts }
+    // `delivery` carries the send state of a post *we* made ("pending" →
+    // "propagated" → "sent", or "failed"); it stays "" for everyone else's.
+    ListModel { id: topicsModel }   // { tid, title, body, ts, replies, delivery }
+    ListModel { id: repliesModel }  // { rid, topicId, body, ts, delivery }
     ListModel { id: threadModel }   // replies for selectedTopicId (display)
 
     // ── Accounts ──────────────────────────────────────────────────────────────
@@ -178,7 +185,8 @@ Item {
             tid: id, title: title, body: body, author: author || "",
             ts: root.formatTs(ts),
             replies: root.countRepliesFor(id),      // catch up any orphan replies
-            placeholder: false
+            placeholder: false,
+            delivery: ""
         });
     }
 
@@ -194,7 +202,8 @@ Item {
             author: "",
             ts: root.formatTs(ts),
             replies: 0,
-            placeholder: true
+            placeholder: true,
+            delivery: ""
         });
     }
 
@@ -215,7 +224,7 @@ Item {
 
     function addReply(id, topicId, body, author, ts) {
         if (root.replyExists(id)) return;           // de-dupe
-        repliesModel.append({ rid: id, topicId: topicId, body: body, author: author || "", ts: root.formatTs(ts) });
+        repliesModel.append({ rid: id, topicId: topicId, body: body, author: author || "", ts: root.formatTs(ts), delivery: "" });
 
         // Bump the parent topic's reply count, backfilling a placeholder topic
         // first if the reply arrived before its topic.
@@ -228,7 +237,39 @@ Item {
 
         // If this reply belongs to the open thread, show it immediately.
         if (topicId === root.selectedTopicId)
-            threadModel.append({ rid: id, body: body, author: author || "", ts: root.formatTs(ts) });
+            threadModel.append({ rid: id, body: body, author: author || "", ts: root.formatTs(ts), delivery: "" });
+    }
+
+    // Delivery state for one of our own posts, pushed by the backend. A post is
+    // echoed locally the moment the send is accepted, which says nothing about
+    // whether it reached anyone — this is what tells the two apart, and the only
+    // thing that makes a node publishing into the void visible from the UI.
+    function setMessageState(id, state, detail) {
+        var i = root.findTopicIndex(id);
+        if (i >= 0)
+            topicsModel.setProperty(i, "delivery", state);
+        for (var j = 0; j < repliesModel.count; ++j)
+            if (repliesModel.get(j).rid === id) {
+                repliesModel.setProperty(j, "delivery", state);
+                break;
+            }
+        for (var k = 0; k < threadModel.count; ++k)
+            if (threadModel.get(k).rid === id) {
+                threadModel.setProperty(k, "delivery", state);
+                break;
+            }
+        if (state === "failed")
+            root.lastError = detail.length > 0 ? "Not delivered: " + detail
+                                               : "Not delivered";
+    }
+
+    // Row suffix for a delivery state. "sent" is the expected outcome, so it
+    // reads as an unmarked row rather than a badge on every post of your own.
+    function deliveryMark(state) {
+        if (state === "pending") return " · sending…";
+        if (state === "propagated") return " · on the network";
+        if (state === "failed") return " · ⚠ not delivered";
+        return "";
     }
 
     function openTopic(tid) {
@@ -243,7 +284,7 @@ Item {
         for (var j = 0; j < repliesModel.count; ++j) {
             var r = repliesModel.get(j);
             if (r.topicId === tid)
-                threadModel.append({ rid: r.rid, body: r.body, author: r.author, ts: r.ts });
+                threadModel.append({ rid: r.rid, body: r.body, author: r.author, ts: r.ts, delivery: r.delivery });
         }
     }
 
@@ -749,6 +790,7 @@ Item {
                                           ? model.replies + (model.replies === 1 ? " reply · awaiting topic…" : " replies · awaiting topic…")
                                           : model.replies + (model.replies === 1 ? " reply · " : " replies · ") + model.ts
                                               + (model.author ? " · by " + root.shortAddress(model.author) : "")
+                                              + root.deliveryMark(model.delivery)
                                     color: Theme.palette.textTertiary
                                     font.pixelSize: Theme.typography.secondaryText
                                     elide: Text.ElideRight
@@ -868,6 +910,7 @@ Item {
                             spacing: 1
                             LogosText {
                                 text: model.ts + (model.author ? " · by " + root.shortAddress(model.author) : "")
+                                      + root.deliveryMark(model.delivery)
                                 color: Theme.palette.textTertiary
                                 font.pixelSize: Theme.typography.secondaryText
                                 font.family: root.monoFont

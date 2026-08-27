@@ -79,4 +79,15 @@ class ExampleForum
     // A reply to topic `topicId` arrived (or was just posted locally). See
     // topicReceived for the `author` caveat.
     SIGNAL(replyReceived(QString id, QString topicId, QString body, QString author, qint64 timestamp))
+
+    // Delivery state of a post *this* install made, keyed by its message id:
+    // "pending" once delivery_module has accepted it locally, "propagated" once
+    // it reaches the network, then "sent" (network-validated) or "failed", with
+    // a reason in `detail`. Never emitted for messages that arrive from others.
+    //
+    // Worth surfacing because `send` returning a request id means only that the
+    // send was accepted locally, and topicReceived/replyReceived fire for our
+    // own posts from a local echo rather than a round trip. Without this, a node
+    // that is publishing into the void looks identical to a healthy one.
+    SIGNAL(messageStateChanged(QString id, QString state, QString detail))
 }

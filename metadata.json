@@ -1,7 +1,7 @@
 {
   "name": "example_forum",
   "display_name": "Example Forum",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "ui_qml",
   "interface": "universal",
   "category": "example",

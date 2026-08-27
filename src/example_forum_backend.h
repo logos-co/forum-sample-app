@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -78,10 +79,37 @@ protected:
   void onContextReady() override;
 
 private:
-  // Wires delivery_module events, then createNode + start + subscribe(kTopic).
+  // Wires delivery_module events, then createNode + subscribe + start.
   // Deferred off onContextReady() because node creation is synchronous and can
   // block briefly — returning promptly lets the QML replica reach Valid sooner.
   void bootstrap();
+
+  // Subscribe to kTopic, flip nodeReady, and kick off the store backfill.
+  // Retries itself on failure (up to kMaxSubscribeAttempts) — a subscribe that
+  // fails once used to leave the app permanently unable to receive, with
+  // composing disabled and no way back short of a restart.
+  //
+  // Called before start(), and again from nodeStarted if that first attempt
+  // didn't take. Idempotent: several paths into it can legitimately land.
+  void subscribeToForum();
+
+  // Re-derive the status PROP from the last connectionStateChanged value. A
+  // no-op until subscribeToForum() succeeds, since bootstrap's own progress
+  // messages own the status until then.
+  void refreshStatus();
+
+  // Pull recent history for kTopic from a store service peer and replay it
+  // through the normal decode/emit path, so a late joiner (or a node that spent
+  // time with no mesh peers) doesn't see an empty forum. No-op unless
+  // EXAMPLE_FORUM_STORE_PEER names a peer to ask.
+  void backfillFromStore();
+
+  // Resolve one of our own sends: map a delivery_module requestId back to the
+  // ForumMessage id it was for and report `state` ("propagated" / "sent" /
+  // "failed") to the view. Ignores request ids we don't know — delivery_module
+  // is shared, so other apps' sends surface here too.
+  void settleSend(const QString &requestId, const QString &state,
+                  const QString &detail);
 
   // Opens (or, on first run, mints) this install's accounts and selects one.
   // Fills m_credential / m_accounts / m_keyId and publishes the account PROPs.
@@ -141,7 +169,9 @@ private:
 
   // This app's private data directory (not shared with other Logos modules),
   // scoped to the Basecamp data tree (LOGOS_USER_DIR) when there is one so the
-  // accounts track the keystore_signer instance that holds their keys.
+  // accounts track the keystore_signer instance that holds their keys, and
+  // suffixed by EXAMPLE_FORUM_INSTANCE when set so two standalone instances on
+  // one machine don't share one identity.
   QString identityDir() const;
 
   // Encode `msg`, send it on kTopic, then locally echo it (the relay does not
@@ -178,6 +208,35 @@ private:
   // empty; publishAccountState() is what maintains that. Mirrored to the view
   // as the myAddress PROP.
   QString m_keyId;
+
+  // True once subscribe(kTopic) has succeeded. Guards the several paths into
+  // subscribeToForum() against each other, and gates refreshStatus().
+  bool m_subscribed = false;
+
+  // How many times subscribeToForum() has asked delivery_module to subscribe.
+  // Bounds the retry so a genuinely broken node doesn't retry forever.
+  int m_subscribeAttempts = 0;
+
+  // True once nodeStarted has confirmed the node is up, or once we've found a
+  // node already running. The store backfill needs a live node, and the
+  // subscribe that precedes it now happens before start() — so this is what
+  // keeps the query from going out against a node that can't serve it.
+  bool m_nodeStarted = false;
+
+  // True once the store backfill has run. It is a one-shot catch-up, not
+  // something to repeat every time the node reports itself started.
+  bool m_backfilled = false;
+
+  // The last connectionStateChanged value (Connected / PartiallyConnected /
+  // Disconnected), or empty before the first one arrives. The only honest
+  // account of connectivity this app gets — a successful local subscribe says
+  // nothing about whether any peer will ever relay to us.
+  QString m_connectionState;
+
+  // Our in-flight sends: delivery_module requestId -> ForumMessage id. Entries
+  // live from the send until the network validates or rejects the message
+  // (settleSend()); "propagated" is a waypoint and keeps the entry.
+  QHash<QString, QString> m_pendingSends;
 
   // This install's keystore-signer-module credential (256-bit bearer secret),
   // kept in memory so publish() can pass it to the signing call directly.

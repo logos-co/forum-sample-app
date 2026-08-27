@@ -57,6 +57,63 @@ qint64 nowNs() {
   return QDateTime::currentMSecsSinceEpoch() * 1000000LL;
 }
 
+// Subscribe retry: how long to wait before asking again, and how many attempts
+// before giving up and leaving the failure on screen.
+constexpr int kSubscribeRetryMs = 5000;
+constexpr int kMaxSubscribeAttempts = 5;
+
+// Store backfill bounds: how far back to ask, how many messages to take, and
+// how long to wait for the peer.
+constexpr qint64 kStoreBackfillWindowNs = 24LL * 60 * 60 * 1000 * 1000000LL;
+constexpr int kStoreBackfillLimit = 100;
+constexpr int kStoreQueryTimeoutMs = 10000;
+
+// The delivery node config: the defaults, with EXAMPLE_FORUM_DELIVERY_CFG (raw
+// JSON object) merged over them, top-level key by top-level key.
+//
+// Overridable because the defaults can't serve two instances on one machine.
+// Both share a public IP, and the relay network scores that down hard — the
+// gossipsub ipColocationFactor* weights, plus the peer manager's own colocation
+// limit — so the second node is pruned rather than grafted, ends up logging
+// "No mesh peer for the given pubsub topic", and receives nothing. It still
+// publishes fine (an empty mesh falls back to fanout), so its posts reach
+// everyone else and only its own inbox stays empty. Colocation scoring is
+// applied by the remote peers, so nothing set locally overrides it; what an
+// override buys is a node that doesn't need mesh membership in the first place:
+//
+//   EXAMPLE_FORUM_DELIVERY_CFG='{"mode":"Edge"}'
+//       light node — takes messages from filter/lightpush service peers.
+//   EXAMPLE_FORUM_DELIVERY_CFG='{"tcpPort":60001,"discv5UdpPort":9001}'
+//       explicit ports, so each node is dialable instead of fighting over the
+//       OS-assigned ones behind NAT (the `dialMe timed out` case).
+//
+// Two IPs (a second machine, VM, or network namespace) remains the clean test.
+QString deliveryConfigJson() {
+  QJsonObject cfg{
+      {"logLevel", "INFO"},
+      {"mode", "Core"},
+      {"preset", "logos.test"},
+  };
+
+  const QString overrides = qEnvironmentVariable("EXAMPLE_FORUM_DELIVERY_CFG");
+  if (!overrides.isEmpty()) {
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(overrides.toUtf8(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+      // Fall back to the defaults rather than refusing to start: a typo in a
+      // debugging env var shouldn't cost you the app.
+      logEvent("ignoring malformed EXAMPLE_FORUM_DELIVERY_CFG (" +
+               err.errorString().toStdString() + ")");
+    } else {
+      const QJsonObject obj = doc.object();
+      for (auto it = obj.begin(); it != obj.end(); ++it)
+        cfg.insert(it.key(), it.value());
+    }
+  }
+
+  return QString::fromUtf8(QJsonDocument(cfg).toJson(QJsonDocument::Compact));
+}
+
 // Account bookkeeping timestamp: milliseconds since the Unix epoch. Human
 // scale, and deliberately not the ns units delivery_module stamps messages
 // with — these two never mix.
@@ -119,14 +176,18 @@ void ExampleForumBackend::onContextReady() {
 void ExampleForumBackend::bootstrap() {
   // --- Subscribe to delivery_module events before starting the node ---------
 
-  // Node health: surface connectionStateChanged (Connected / PartiallyConnected
-  // / Disconnected) as our status string once the node is up.
+  // Node health. connectionStateChanged (Connected / PartiallyConnected /
+  // Disconnected) is the only honest account of connectivity we get, so it
+  // drives the status PROP outright. Deliberately ungated: the early events
+  // land before the subscribe does, and dropping them is what let a node with
+  // no peers sit there reporting "Connected".
   modules().delivery_module.on(
       "connectionStateChanged", [this](const QVariantList &data) {
         if (data.isEmpty())
           return;
-        if (nodeReady())
-          setStatus(data.at(0).toString());
+        m_connectionState = data.at(0).toString();
+        logEvent("connection state -> " + m_connectionState.toStdString());
+        refreshStatus();
       });
 
   // Inbound forum messages on the subscribed topic. data[2] is the raw payload
@@ -147,46 +208,229 @@ void ExampleForumBackend::bootstrap() {
         emitForumMessage(msg, data.at(3).toLongLong());
       });
 
+  // Node startup. start() is dispatch-only in delivery_module v0.2.1 — its
+  // contract is "`true` once dispatched; completion is reported via
+  // `nodeStarted`" — so this event, not start()'s return, says whether the node
+  // actually came up. The subscribe does not hang off it (see bootstrap's
+  // ordering below); this only reports, and re-drives a subscribe that failed
+  // earlier now that the node is definitely up.
+  modules().delivery_module.on("nodeStarted", [this](const QVariantList &data) {
+    const bool ok = !data.isEmpty() && data.at(0).toBool();
+    const QString message = data.value(1).toString();
+    logEvent("nodeStarted success=" + std::to_string(ok) + " " +
+             message.toStdString());
+    if (!ok) {
+      setStatus(QStringLiteral("Node failed to start: %1").arg(message));
+      return;
+    }
+    m_nodeStarted = true;
+    // Both of these call synchronously back into delivery_module, so they run
+    // off the event callback: calling in from inside the module's own event
+    // dispatch is exactly the shape that times out.
+    if (m_subscribed) {
+      refreshStatus();
+      QTimer::singleShot(0, [this]() { backfillFromStore(); });
+      return;
+    }
+    // Fresh retry budget: attempts spent while the node was still booting were
+    // fighting a different problem than the one from here on.
+    m_subscribeAttempts = 0;
+    QTimer::singleShot(0, [this]() { subscribeToForum(); });
+  });
+
+  // Delivery outcomes for our own posts, keyed by the request id send() hands
+  // back. publish()'s local echo is a claim that we tried, not evidence that
+  // anything left the machine; these events are what settle it.
+  modules().delivery_module.on(
+      "messagePropagated", [this](const QVariantList &data) {
+        settleSend(data.value(0).toString(), QStringLiteral("propagated"),
+                   QString());
+      });
+  modules().delivery_module.on("messageSent", [this](const QVariantList &data) {
+    settleSend(data.value(0).toString(), QStringLiteral("sent"), QString());
+  });
+  modules().delivery_module.on(
+      "messageError", [this](const QVariantList &data) {
+        settleSend(data.value(0).toString(), QStringLiteral("failed"),
+                   data.value(2).toString());
+      });
+
   // --- Open/create this install's signing accounts ---------------------------
   // Independent of the delivery node below; publish() gates on both being
   // ready (nodeReady() and a selected account).
   loadAccounts();
 
-  // --- Create + start the node against the logos.test fleet -----------------
-  // No ports specified: delivery_module defaults them to 0, so the OS assigns
-  // free ports and two instances on one machine don't collide.
-  const QJsonObject cfg{
-      {"logLevel", "INFO"},
-      {"mode", "Core"},
-      {"preset", "logos.test"},
-  };
-  const QString cfgJson =
-      QString::fromUtf8(QJsonDocument(cfg).toJson(QJsonDocument::Compact));
+  // --- Create + start the node ----------------------------------------------
+  const QString cfgJson = deliveryConfigJson();
+  logEvent("createNode config: " + cfgJson.toStdString());
 
   LogosResult created = modules().delivery_module.createNode(cfgJson);
-  if (created.success) {
-    logEvent("createNode succeeded, starting node");
-    LogosResult started = modules().delivery_module.start();
-    if (!started.success)
-      logEvent("start failed: " + started.getError().toStdString());
-  } else {
+  if (!created.success) {
     // delivery_module is a singleton shared across Basecamp apps, so another
-    // app may have already created and started the node. createNode then fails;
-    // proceed to subscribe so we still receive on our topic.
+    // app may have already created and started the node. createNode then fails
+    // and no nodeStarted will ever fire for us — subscribe directly.
     logEvent("createNode failed (node may already be running): " +
              created.getError().toStdString());
-  }
-
-  LogosResult subscribed = modules().delivery_module.subscribe(kTopic);
-  if (!subscribed.success) {
-    setStatus(QStringLiteral("subscribe failed: %1").arg(subscribed.getError()));
-    logEvent("subscribe failed: " + subscribed.getError().toStdString());
+    // Whoever created it started it too, and no nodeStarted will fire for us.
+    m_nodeStarted = true;
+    subscribeToForum();
     return;
   }
 
+  logEvent("createNode succeeded");
+
+  // Subscribe *before* start(), which is what use-delivery-module documents
+  // ("Subscribe before `start()`, and wire event `.on(...)` handlers before
+  // triggering sends, or you'll miss early events"). This is the one window
+  // where both hazards are absent: the node is built but not yet bootstrapping,
+  // so the call doesn't queue behind discovery work and time out, and the
+  // subscription is registered before any message can arrive — so there is no
+  // race with start() left to lose either.
+  subscribeToForum();
+
+  setStatus(QStringLiteral("Starting node…"));
+  LogosResult started = modules().delivery_module.start();
+  if (!started.success) {
+    setStatus(QStringLiteral("Node failed to start: %1").arg(started.getError()));
+    logEvent("start failed: " + started.getError().toStdString());
+    return;
+  }
+  logEvent("start dispatched — waiting for nodeStarted");
+}
+
+void ExampleForumBackend::subscribeToForum() {
+  if (m_subscribed)
+    return; // the pre-start attempt and nodeStarted can both land
+
+  ++m_subscribeAttempts;
+  LogosResult subscribed = modules().delivery_module.subscribe(kTopic);
+  if (!subscribed.success) {
+    setStatus(QStringLiteral("subscribe failed: %1").arg(subscribed.getError()));
+    logEvent("subscribe attempt " + std::to_string(m_subscribeAttempts) +
+             " failed: " + subscribed.getError().toStdString());
+    // Retry rather than leaving the app receiving nothing with composing
+    // disabled. The common failure here is a timeout because the node is busy
+    // bootstrapping, which passes on its own.
+    if (m_subscribeAttempts < kMaxSubscribeAttempts)
+      QTimer::singleShot(kSubscribeRetryMs, [this]() { subscribeToForum(); });
+    return;
+  }
+
+  m_subscribed = true;
+  // Composing is gated on nodeReady, and publishing genuinely does work without
+  // mesh peers (that is exactly the failure mode this app used to hide), so a
+  // successful subscribe is the right gate. Connectivity is reported separately,
+  // through the status PROP.
   setNodeReady(true);
-  setStatus(QStringLiteral("Connected to forum on %1").arg(kTopic));
-  logEvent("node ready — forum on " + kTopic.toStdString());
+  refreshStatus();
+  logEvent("subscribed — forum on " + kTopic.toStdString());
+
+  backfillFromStore();
+}
+
+void ExampleForumBackend::refreshStatus() {
+  if (!m_subscribed)
+    return; // bootstrap's own progress messages own the status until then
+
+  if (m_connectionState.isEmpty()) {
+    // Subscribed locally, but nothing has yet said we have peers. This is the
+    // state a second instance on one machine gets stuck in when the network
+    // prunes it for IP colocation, so name it instead of claiming "Connected".
+    setStatus(QStringLiteral("Subscribed — waiting for peers"));
+    return;
+  }
+  setStatus(m_connectionState);
+}
+
+void ExampleForumBackend::backfillFromStore() {
+  // The subscribe now runs before start(), so this can be reached with a node
+  // that isn't up yet; nodeStarted calls back here once it is. One-shot: a
+  // catch-up, not something to repeat on every start report.
+  if (m_backfilled || !m_subscribed || !m_nodeStarted)
+    return;
+
+  const QString peer = qEnvironmentVariable("EXAMPLE_FORUM_STORE_PEER");
+  if (peer.isEmpty())
+    return; // live traffic only, as before
+
+  m_backfilled = true;
+
+  // Live relay traffic is otherwise all this app ever sees, so everything
+  // posted before we subscribed — or while we had no mesh peers to relay to us
+  // — is simply lost. A store service peer still holds it. Replay it through
+  // the same decode/emit path as live messages so the view's de-dupe treats it
+  // as a late arrival and nothing shows up twice.
+  QJsonObject query{
+      {"requestId", newId()},
+      {"includeData", true},
+      {"paginationForward", false},
+      {"paginationLimit", kStoreBackfillLimit},
+      {"contentTopics", QJsonArray{kTopic}},
+      // A string, not a number: ns since the epoch exceeds what a JSON double
+      // holds exactly, and the store API accepts either form.
+      {"timeStart", QString::number(nowNs() - kStoreBackfillWindowNs)},
+  };
+
+  LogosResult r = modules().delivery_module.storeQuery(
+      QString::fromUtf8(QJsonDocument(query).toJson(QJsonDocument::Compact)),
+      peer, kStoreQueryTimeoutMs);
+  if (!r.success) {
+    logEvent("store backfill failed: " + r.getError().toStdString());
+    return;
+  }
+
+  const QJsonDocument doc = QJsonDocument::fromJson(r.getString().toUtf8());
+  const QJsonArray messages =
+      doc.object().value(QStringLiteral("messages")).toArray();
+
+  int replayed = 0;
+  for (const QJsonValue &value : messages) {
+    const QJsonObject message =
+        value.toObject().value(QStringLiteral("message")).toObject();
+    // The kernel's StoreQueryResponseHex wraps a WakuMessage, whose payload is
+    // base64 (what the send path encodes) and whose timestamp is ns since the
+    // epoch, as a number or a string depending on the build.
+    const QByteArray payload = QByteArray::fromBase64(
+        message.value(QStringLiteral("payload")).toString().toUtf8());
+    const QJsonValue ts = message.value(QStringLiteral("timestamp"));
+
+    ForumMessage msg;
+    if (payload.isEmpty() || !decodeForumMessage(payload, msg))
+      continue; // not one of ours, or a shape this build can't read
+    emitForumMessage(msg, ts.isString() ? ts.toString().toLongLong()
+                                        : static_cast<qint64>(ts.toDouble()));
+    ++replayed;
+  }
+
+  // Log both counts: a non-zero fetch that replays nothing means the response
+  // shape has moved (storeQuery is explicitly "use at your own risk", backed by
+  // a kernel API that can change without a deprecation cycle), which is worth
+  // telling apart from an empty store.
+  logEvent("store backfill: replayed " + std::to_string(replayed) + " of " +
+           std::to_string(messages.size()) + " message(s) from " +
+           peer.toStdString());
+}
+
+void ExampleForumBackend::settleSend(const QString &requestId,
+                                     const QString &state,
+                                     const QString &detail) {
+  if (requestId.isEmpty())
+    return;
+
+  const auto it = m_pendingSends.constFind(requestId);
+  if (it == m_pendingSends.constEnd())
+    return; // another app's send — delivery_module is shared
+
+  const QString messageId = it.value();
+  // "propagated" is a waypoint, not an outcome: the message has reached the
+  // network but isn't validated yet, so keep the mapping for the event that
+  // settles it.
+  if (state != QLatin1String("propagated"))
+    m_pendingSends.remove(requestId);
+
+  logEvent("send " + requestId.toStdString() + " -> " + state.toStdString() +
+           (detail.isEmpty() ? "" : " (" + detail.toStdString() + ")"));
+  emit messageStateChanged(messageId, state, detail);
 }
 
 QString ExampleForumBackend::identityDir() const {
@@ -197,9 +441,22 @@ QString ExampleForumBackend::identityDir() const {
   // so our credential + accounts have to live there too: an account stored
   // outside it is reloaded against a keystore that has never seen its key, and
   // every sign() then fails. Sit next to the keystore we're bound to.
+  //
+  // EXAMPLE_FORUM_INSTANCE suffixes whichever path we land on. The standalone
+  // `nix run` launcher sets no LOGOS_USER_DIR, so two instances started that
+  // way otherwise share one identity dir — one credential, one accounts.json,
+  // both processes writing it — and post as the same account. Since every
+  // account is a key under the credential, a distinct dir means a distinct
+  // credential and so a distinct keystore_signer namespace: separate accounts,
+  // no coordination needed.
+  const QString instance = qEnvironmentVariable("EXAMPLE_FORUM_INSTANCE");
+  const QString suffix =
+      instance.isEmpty() ? QString() : QStringLiteral("-") + instance;
+
   const QString userDir = qEnvironmentVariable("LOGOS_USER_DIR");
   if (!userDir.isEmpty())
-    return userDir + QStringLiteral("/module_data/example_forum/identity");
+    return userDir + QStringLiteral("/module_data/example_forum/identity") +
+           suffix;
 
   // Default launch (no --user-dir): AppDataLocation is keyed off the *host*
   // process's org/app name (the ui-host, not this plugin), so namespace under
@@ -208,7 +465,7 @@ QString ExampleForumBackend::identityDir() const {
   // loadAccounts() reconciles against the keystore, so a mismatch costs the
   // account labels rather than every publish().
   return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-         QStringLiteral("/example_forum/identity");
+         QStringLiteral("/example_forum/identity") + suffix;
 }
 
 bool ExampleForumBackend::ensureCredential() {
@@ -642,12 +899,19 @@ QString ExampleForumBackend::publish(ForumMessage msg) {
     logEvent("send failed: " + r.getError().toStdString());
     return r.getError();
   }
+  const QString requestId = r.getString();
+  m_pendingSends.insert(requestId, msg.id);
   logEvent("published " + msg.type.toStdString() + " id=" + msg.id.toStdString() +
-           ", requestId=" + r.getString().toStdString());
+           ", requestId=" + requestId.toStdString());
 
   // Local echo — the relay won't loop our own message back, so surface it now.
   // The id lets the QML view de-dupe if the network ever does echo it.
   emitForumMessage(msg, nowNs());
+  // ...and immediately mark it unconfirmed. A successful send() means the
+  // module accepted the message locally and nothing more, so on its own the
+  // echo above would render a post that never left the machine exactly like a
+  // delivered one. settleSend() resolves this from the delivery events.
+  emit messageStateChanged(msg.id, QStringLiteral("pending"), QString());
   return QString(); // empty == success
 }
 
