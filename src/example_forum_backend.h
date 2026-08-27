@@ -84,10 +84,10 @@ private:
   // block briefly — returning promptly lets the QML replica reach Valid sooner.
   void bootstrap();
 
-  // Subscribe to kTopic, flip nodeReady, and kick off the store backfill.
-  // Retries itself on failure (up to kMaxSubscribeAttempts) — a subscribe that
-  // fails once used to leave the app permanently unable to receive, with
-  // composing disabled and no way back short of a restart.
+  // Subscribe to kTopic and flip nodeReady. Retries itself on failure (up to
+  // kMaxSubscribeAttempts) — a subscribe that fails once used to leave the app
+  // permanently unable to receive, with composing disabled and no way back
+  // short of a restart.
   //
   // Called before start(), and again from nodeStarted if that first attempt
   // didn't take. Idempotent: several paths into it can legitimately land.
@@ -97,12 +97,6 @@ private:
   // no-op until subscribeToForum() succeeds, since bootstrap's own progress
   // messages own the status until then.
   void refreshStatus();
-
-  // Pull recent history for kTopic from a store service peer and replay it
-  // through the normal decode/emit path, so a late joiner (or a node that spent
-  // time with no mesh peers) doesn't see an empty forum. No-op unless
-  // EXAMPLE_FORUM_STORE_PEER names a peer to ask.
-  void backfillFromStore();
 
   // Resolve one of our own sends: map a delivery_module requestId back to the
   // ForumMessage id it was for and report `state` ("propagated" / "sent" /
@@ -169,9 +163,7 @@ private:
 
   // This app's private data directory (not shared with other Logos modules),
   // scoped to the Basecamp data tree (LOGOS_USER_DIR) when there is one so the
-  // accounts track the keystore_signer instance that holds their keys, and
-  // suffixed by EXAMPLE_FORUM_INSTANCE when set so two standalone instances on
-  // one machine don't share one identity.
+  // accounts track the keystore_signer instance that holds their keys.
   QString identityDir() const;
 
   // Encode `msg`, send it on kTopic, then locally echo it (the relay does not
@@ -216,16 +208,6 @@ private:
   // How many times subscribeToForum() has asked delivery_module to subscribe.
   // Bounds the retry so a genuinely broken node doesn't retry forever.
   int m_subscribeAttempts = 0;
-
-  // True once nodeStarted has confirmed the node is up, or once we've found a
-  // node already running. The store backfill needs a live node, and the
-  // subscribe that precedes it now happens before start() — so this is what
-  // keeps the query from going out against a node that can't serve it.
-  bool m_nodeStarted = false;
-
-  // True once the store backfill has run. It is a one-shot catch-up, not
-  // something to repeat every time the node reports itself started.
-  bool m_backfilled = false;
 
   // The last connectionStateChanged value (Connected / PartiallyConnected /
   // Disconnected), or empty before the first one arrives. The only honest

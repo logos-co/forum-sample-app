@@ -62,58 +62,6 @@ qint64 nowNs() {
 constexpr int kSubscribeRetryMs = 5000;
 constexpr int kMaxSubscribeAttempts = 5;
 
-// Store backfill bounds: how far back to ask, how many messages to take, and
-// how long to wait for the peer.
-constexpr qint64 kStoreBackfillWindowNs = 24LL * 60 * 60 * 1000 * 1000000LL;
-constexpr int kStoreBackfillLimit = 100;
-constexpr int kStoreQueryTimeoutMs = 10000;
-
-// The delivery node config: the defaults, with EXAMPLE_FORUM_DELIVERY_CFG (raw
-// JSON object) merged over them, top-level key by top-level key.
-//
-// Overridable because the defaults can't serve two instances on one machine.
-// Both share a public IP, and the relay network scores that down hard — the
-// gossipsub ipColocationFactor* weights, plus the peer manager's own colocation
-// limit — so the second node is pruned rather than grafted, ends up logging
-// "No mesh peer for the given pubsub topic", and receives nothing. It still
-// publishes fine (an empty mesh falls back to fanout), so its posts reach
-// everyone else and only its own inbox stays empty. Colocation scoring is
-// applied by the remote peers, so nothing set locally overrides it; what an
-// override buys is a node that doesn't need mesh membership in the first place:
-//
-//   EXAMPLE_FORUM_DELIVERY_CFG='{"mode":"Edge"}'
-//       light node — takes messages from filter/lightpush service peers.
-//   EXAMPLE_FORUM_DELIVERY_CFG='{"tcpPort":60001,"discv5UdpPort":9001}'
-//       explicit ports, so each node is dialable instead of fighting over the
-//       OS-assigned ones behind NAT (the `dialMe timed out` case).
-//
-// Two IPs (a second machine, VM, or network namespace) remains the clean test.
-QString deliveryConfigJson() {
-  QJsonObject cfg{
-      {"logLevel", "INFO"},
-      {"mode", "Core"},
-      {"preset", "logos.test"},
-  };
-
-  const QString overrides = qEnvironmentVariable("EXAMPLE_FORUM_DELIVERY_CFG");
-  if (!overrides.isEmpty()) {
-    QJsonParseError err{};
-    const QJsonDocument doc = QJsonDocument::fromJson(overrides.toUtf8(), &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
-      // Fall back to the defaults rather than refusing to start: a typo in a
-      // debugging env var shouldn't cost you the app.
-      logEvent("ignoring malformed EXAMPLE_FORUM_DELIVERY_CFG (" +
-               err.errorString().toStdString() + ")");
-    } else {
-      const QJsonObject obj = doc.object();
-      for (auto it = obj.begin(); it != obj.end(); ++it)
-        cfg.insert(it.key(), it.value());
-    }
-  }
-
-  return QString::fromUtf8(QJsonDocument(cfg).toJson(QJsonDocument::Compact));
-}
-
 // Account bookkeeping timestamp: milliseconds since the Unix epoch. Human
 // scale, and deliberately not the ns units delivery_module stamps messages
 // with — these two never mix.
@@ -223,17 +171,14 @@ void ExampleForumBackend::bootstrap() {
       setStatus(QStringLiteral("Node failed to start: %1").arg(message));
       return;
     }
-    m_nodeStarted = true;
-    // Both of these call synchronously back into delivery_module, so they run
-    // off the event callback: calling in from inside the module's own event
-    // dispatch is exactly the shape that times out.
     if (m_subscribed) {
       refreshStatus();
-      QTimer::singleShot(0, [this]() { backfillFromStore(); });
       return;
     }
     // Fresh retry budget: attempts spent while the node was still booting were
-    // fighting a different problem than the one from here on.
+    // fighting a different problem than the one from here on. Deferred off the
+    // event callback — calling synchronously back into the module from inside
+    // its own event dispatch is exactly the shape that times out.
     m_subscribeAttempts = 0;
     QTimer::singleShot(0, [this]() { subscribeToForum(); });
   });
@@ -260,9 +205,16 @@ void ExampleForumBackend::bootstrap() {
   // ready (nodeReady() and a selected account).
   loadAccounts();
 
-  // --- Create + start the node ----------------------------------------------
-  const QString cfgJson = deliveryConfigJson();
-  logEvent("createNode config: " + cfgJson.toStdString());
+  // --- Create + start the node against the logos.test fleet -----------------
+  // No ports specified: delivery_module defaults them to 0, so the OS assigns
+  // free ports.
+  const QJsonObject cfg{
+      {"logLevel", "INFO"},
+      {"mode", "Core"},
+      {"preset", "logos.test"},
+  };
+  const QString cfgJson =
+      QString::fromUtf8(QJsonDocument(cfg).toJson(QJsonDocument::Compact));
 
   LogosResult created = modules().delivery_module.createNode(cfgJson);
   if (!created.success) {
@@ -271,8 +223,6 @@ void ExampleForumBackend::bootstrap() {
     // and no nodeStarted will ever fire for us — subscribe directly.
     logEvent("createNode failed (node may already be running): " +
              created.getError().toStdString());
-    // Whoever created it started it too, and no nodeStarted will fire for us.
-    m_nodeStarted = true;
     subscribeToForum();
     return;
   }
@@ -317,15 +267,12 @@ void ExampleForumBackend::subscribeToForum() {
   }
 
   m_subscribed = true;
-  // Composing is gated on nodeReady, and publishing genuinely does work without
-  // mesh peers (that is exactly the failure mode this app used to hide), so a
-  // successful subscribe is the right gate. Connectivity is reported separately,
-  // through the status PROP.
+  // Composing is gated on nodeReady, and a subscribed node can publish before
+  // it has any peers to relay for it, so a successful subscribe is the right
+  // gate. Connectivity is a separate question, reported through the status PROP.
   setNodeReady(true);
   refreshStatus();
   logEvent("subscribed — forum on " + kTopic.toStdString());
-
-  backfillFromStore();
 }
 
 void ExampleForumBackend::refreshStatus() {
@@ -333,82 +280,15 @@ void ExampleForumBackend::refreshStatus() {
     return; // bootstrap's own progress messages own the status until then
 
   if (m_connectionState.isEmpty()) {
-    // Subscribed locally, but nothing has yet said we have peers. This is the
-    // state a second instance on one machine gets stuck in when the network
-    // prunes it for IP colocation, so name it instead of claiming "Connected".
+    // Subscribed locally, but nothing has yet said we have peers — and a node
+    // with none receives nothing while still publishing happily. Name that
+    // state instead of claiming "Connected", which is what the old status line
+    // did and what made a node talking to nobody indistinguishable from a
+    // healthy one.
     setStatus(QStringLiteral("Subscribed — waiting for peers"));
     return;
   }
   setStatus(m_connectionState);
-}
-
-void ExampleForumBackend::backfillFromStore() {
-  // The subscribe now runs before start(), so this can be reached with a node
-  // that isn't up yet; nodeStarted calls back here once it is. One-shot: a
-  // catch-up, not something to repeat on every start report.
-  if (m_backfilled || !m_subscribed || !m_nodeStarted)
-    return;
-
-  const QString peer = qEnvironmentVariable("EXAMPLE_FORUM_STORE_PEER");
-  if (peer.isEmpty())
-    return; // live traffic only, as before
-
-  m_backfilled = true;
-
-  // Live relay traffic is otherwise all this app ever sees, so everything
-  // posted before we subscribed — or while we had no mesh peers to relay to us
-  // — is simply lost. A store service peer still holds it. Replay it through
-  // the same decode/emit path as live messages so the view's de-dupe treats it
-  // as a late arrival and nothing shows up twice.
-  QJsonObject query{
-      {"requestId", newId()},
-      {"includeData", true},
-      {"paginationForward", false},
-      {"paginationLimit", kStoreBackfillLimit},
-      {"contentTopics", QJsonArray{kTopic}},
-      // A string, not a number: ns since the epoch exceeds what a JSON double
-      // holds exactly, and the store API accepts either form.
-      {"timeStart", QString::number(nowNs() - kStoreBackfillWindowNs)},
-  };
-
-  LogosResult r = modules().delivery_module.storeQuery(
-      QString::fromUtf8(QJsonDocument(query).toJson(QJsonDocument::Compact)),
-      peer, kStoreQueryTimeoutMs);
-  if (!r.success) {
-    logEvent("store backfill failed: " + r.getError().toStdString());
-    return;
-  }
-
-  const QJsonDocument doc = QJsonDocument::fromJson(r.getString().toUtf8());
-  const QJsonArray messages =
-      doc.object().value(QStringLiteral("messages")).toArray();
-
-  int replayed = 0;
-  for (const QJsonValue &value : messages) {
-    const QJsonObject message =
-        value.toObject().value(QStringLiteral("message")).toObject();
-    // The kernel's StoreQueryResponseHex wraps a WakuMessage, whose payload is
-    // base64 (what the send path encodes) and whose timestamp is ns since the
-    // epoch, as a number or a string depending on the build.
-    const QByteArray payload = QByteArray::fromBase64(
-        message.value(QStringLiteral("payload")).toString().toUtf8());
-    const QJsonValue ts = message.value(QStringLiteral("timestamp"));
-
-    ForumMessage msg;
-    if (payload.isEmpty() || !decodeForumMessage(payload, msg))
-      continue; // not one of ours, or a shape this build can't read
-    emitForumMessage(msg, ts.isString() ? ts.toString().toLongLong()
-                                        : static_cast<qint64>(ts.toDouble()));
-    ++replayed;
-  }
-
-  // Log both counts: a non-zero fetch that replays nothing means the response
-  // shape has moved (storeQuery is explicitly "use at your own risk", backed by
-  // a kernel API that can change without a deprecation cycle), which is worth
-  // telling apart from an empty store.
-  logEvent("store backfill: replayed " + std::to_string(replayed) + " of " +
-           std::to_string(messages.size()) + " message(s) from " +
-           peer.toStdString());
 }
 
 void ExampleForumBackend::settleSend(const QString &requestId,
@@ -441,22 +321,9 @@ QString ExampleForumBackend::identityDir() const {
   // so our credential + accounts have to live there too: an account stored
   // outside it is reloaded against a keystore that has never seen its key, and
   // every sign() then fails. Sit next to the keystore we're bound to.
-  //
-  // EXAMPLE_FORUM_INSTANCE suffixes whichever path we land on. The standalone
-  // `nix run` launcher sets no LOGOS_USER_DIR, so two instances started that
-  // way otherwise share one identity dir — one credential, one accounts.json,
-  // both processes writing it — and post as the same account. Since every
-  // account is a key under the credential, a distinct dir means a distinct
-  // credential and so a distinct keystore_signer namespace: separate accounts,
-  // no coordination needed.
-  const QString instance = qEnvironmentVariable("EXAMPLE_FORUM_INSTANCE");
-  const QString suffix =
-      instance.isEmpty() ? QString() : QStringLiteral("-") + instance;
-
   const QString userDir = qEnvironmentVariable("LOGOS_USER_DIR");
   if (!userDir.isEmpty())
-    return userDir + QStringLiteral("/module_data/example_forum/identity") +
-           suffix;
+    return userDir + QStringLiteral("/module_data/example_forum/identity");
 
   // Default launch (no --user-dir): AppDataLocation is keyed off the *host*
   // process's org/app name (the ui-host, not this plugin), so namespace under
@@ -465,7 +332,7 @@ QString ExampleForumBackend::identityDir() const {
   // loadAccounts() reconciles against the keystore, so a mismatch costs the
   // account labels rather than every publish().
   return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-         QStringLiteral("/example_forum/identity") + suffix;
+         QStringLiteral("/example_forum/identity");
 }
 
 bool ExampleForumBackend::ensureCredential() {
