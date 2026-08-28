@@ -28,15 +28,17 @@ Item {
     readonly property string topic:      backend ? backend.topic      : ""
     readonly property string appVersion: backend ? backend.appVersion : ""
     readonly property string myAddress:  backend ? backend.myAddress  : ""
+    readonly property string myLabel:    backend ? backend.myLabel    : ""
+    readonly property string accountsJson: backend ? backend.accountsJson : "[]"
 
-    // Short display form for a signer address: first 6 + last 4 hex chars.
+    // Short display form for a signer key id: first 6 + last 4 hex chars.
     // `author` is a claimed signer, not a verified one — this app can't check
     // a signature yet (see example_forum.rep's topicReceived doc comment) —
     // so this is a label, not a trust indicator.
-    // shortAddress("{\"address\":\"0xdFcd008F17647543e024d2db17dEDf4B23c4dfC3\"") → "0xdfcd...dfc3"
+    // shortAddress("a3f0c41d9b27e5106d84b3f27e109c2b") → "a3f0c4…9c2b"
     function shortAddress(addr) {
         if (!addr || addr.length <= 12) return addr || "";
-        return addr.substring(12, 18) + "…" + addr.substring(addr.length - 6, addr.length - 2);
+        return addr.substring(0, 6) + "…" + addr.substring(addr.length - 4);
     }
 
     // Currently opened topic (the thread shown on the right), and a transient
@@ -48,6 +50,10 @@ Item {
     // real topic message hasn't arrived) — drives the "restore from title" pane.
     property bool selectedIsPlaceholder: false
     property string lastError: ""
+    // Errors from the account dialogs. Separate from lastError because those
+    // dialogs are modal — an error shown on the main error line would sit
+    // behind the very dialog that has to report it.
+    property string accountError: ""
 
     onStatusChanged: log("status -> \"" + status + "\"")
 
@@ -72,19 +78,72 @@ Item {
             root.log("replyReceived -> " + id + " on " + topicId);
             root.addReply(id, topicId, body, author, timestamp);
         }
+        function onMessageStateChanged(id, state, detail) {
+            root.log("messageStateChanged -> " + id + " " + state
+                     + (detail.length > 0 ? " (" + detail + ")" : ""));
+            root.setMessageState(id, state, detail);
+        }
     }
 
     Component.onCompleted: {
         log("Component.onCompleted — view created");
         root.ready = root.backend !== null && logos.isViewModuleReady("example_forum");
+        // The replica may already hold accounts by now, in which case
+        // onAccountsJsonChanged has come and gone before this view existed.
+        root.rebuildAccounts();
     }
     Component.onDestruction: log("Component.onDestruction — view torn down")
 
     // ── Models ────────────────────────────────────────────────────────────────
     // Flat topic + reply stores, plus the reply list for the open topic.
-    ListModel { id: topicsModel }   // { tid, title, body, ts, replies }
-    ListModel { id: repliesModel }  // { rid, topicId, body, ts }
+    // `delivery` carries the send state of a post *we* made ("pending" →
+    // "propagated" → "sent", or "failed"); it stays "" for everyone else's.
+    ListModel { id: topicsModel }   // { tid, title, body, ts, replies, delivery }
+    ListModel { id: repliesModel }  // { rid, topicId, body, ts, delivery }
     ListModel { id: threadModel }   // replies for selectedTopicId (display)
+
+    // ── Accounts ──────────────────────────────────────────────────────────────
+    // Mirrors the backend's accountsJson PROP, which is re-published whole on
+    // every create/select/rename/delete — so this is rebuilt rather than
+    // patched. `display` is precomputed because ComboBox's textRole needs a
+    // single role to show.
+    ListModel { id: accountsModel } // { keyId, label, display }
+
+    function rebuildAccounts() {
+        accountsModel.clear();
+        var list = [];
+        try {
+            list = JSON.parse(root.accountsJson);
+        } catch (e) {
+            root.log("could not parse accountsJson: " + e);
+        }
+        for (var i = 0; i < list.length; ++i) {
+            accountsModel.append({
+                keyId: list[i].keyId,
+                label: list[i].label,
+                display: list[i].label + " (" + root.shortAddress(list[i].keyId) + ")"
+            });
+        }
+        root.syncAccountCombo();
+    }
+
+    function accountIndexOf(keyId) {
+        for (var i = 0; i < accountsModel.count; ++i)
+            if (accountsModel.get(i).keyId === keyId) return i;
+        return -1;
+    }
+
+    // Point the combo at whichever account the backend says is selected.
+    // Assigned imperatively, not bound: activating the combo writes
+    // currentIndex itself, which would break a declarative binding for good.
+    function syncAccountCombo() {
+        var i = root.accountIndexOf(root.myAddress);
+        if (accountCombo.currentIndex !== i)
+            accountCombo.currentIndex = i;
+    }
+
+    onAccountsJsonChanged: root.rebuildAccounts()
+    onMyAddressChanged: root.syncAccountCombo()
 
     // delivery_module timestamps are nanoseconds since the Unix epoch; ms is
     // plenty for display. A 0/absent timestamp falls back to now.
@@ -126,7 +185,8 @@ Item {
             tid: id, title: title, body: body, author: author || "",
             ts: root.formatTs(ts),
             replies: root.countRepliesFor(id),      // catch up any orphan replies
-            placeholder: false
+            placeholder: false,
+            delivery: ""
         });
     }
 
@@ -142,7 +202,8 @@ Item {
             author: "",
             ts: root.formatTs(ts),
             replies: 0,
-            placeholder: true
+            placeholder: true,
+            delivery: ""
         });
     }
 
@@ -163,7 +224,7 @@ Item {
 
     function addReply(id, topicId, body, author, ts) {
         if (root.replyExists(id)) return;           // de-dupe
-        repliesModel.append({ rid: id, topicId: topicId, body: body, author: author || "", ts: root.formatTs(ts) });
+        repliesModel.append({ rid: id, topicId: topicId, body: body, author: author || "", ts: root.formatTs(ts), delivery: "" });
 
         // Bump the parent topic's reply count, backfilling a placeholder topic
         // first if the reply arrived before its topic.
@@ -176,7 +237,39 @@ Item {
 
         // If this reply belongs to the open thread, show it immediately.
         if (topicId === root.selectedTopicId)
-            threadModel.append({ rid: id, body: body, author: author || "", ts: root.formatTs(ts) });
+            threadModel.append({ rid: id, body: body, author: author || "", ts: root.formatTs(ts), delivery: "" });
+    }
+
+    // Delivery state for one of our own posts, pushed by the backend. A post is
+    // echoed locally the moment the send is accepted, which says nothing about
+    // whether it reached anyone — this is what tells the two apart, and the only
+    // thing that makes a node publishing into the void visible from the UI.
+    function setMessageState(id, state, detail) {
+        var i = root.findTopicIndex(id);
+        if (i >= 0)
+            topicsModel.setProperty(i, "delivery", state);
+        for (var j = 0; j < repliesModel.count; ++j)
+            if (repliesModel.get(j).rid === id) {
+                repliesModel.setProperty(j, "delivery", state);
+                break;
+            }
+        for (var k = 0; k < threadModel.count; ++k)
+            if (threadModel.get(k).rid === id) {
+                threadModel.setProperty(k, "delivery", state);
+                break;
+            }
+        if (state === "failed")
+            root.lastError = detail.length > 0 ? "Not delivered: " + detail
+                                               : "Not delivered";
+    }
+
+    // Row suffix for a delivery state. "sent" is the expected outcome, so it
+    // reads as an unmarked row rather than a badge on every post of your own.
+    function deliveryMark(state) {
+        if (state === "pending") return " · sending…";
+        if (state === "propagated") return " · on the network";
+        if (state === "failed") return " · ⚠ not delivered";
+        return "";
     }
 
     function openTopic(tid) {
@@ -191,7 +284,7 @@ Item {
         for (var j = 0; j < repliesModel.count; ++j) {
             var r = repliesModel.get(j);
             if (r.topicId === tid)
-                threadModel.append({ rid: r.rid, body: r.body, author: r.author, ts: r.ts });
+                threadModel.append({ rid: r.rid, body: r.body, author: r.author, ts: r.ts, delivery: r.delivery });
         }
     }
 
@@ -219,6 +312,57 @@ Item {
             if (err) { root.lastError = err; root.log("reconstruct error -> " + err); }
             else { restoreField.text = ""; }
         }, function (e) { root.lastError = e; });
+    }
+
+    // ── Account actions ───────────────────────────────────────────────────────
+    // Each mirrors the create/reply pattern: call the slot through logos.watch
+    // and surface any error on the shared lastError line. The backend
+    // re-publishes myAddress / myLabel / accountsJson on success, so nothing
+    // here mutates local state — the PROP change handlers do it.
+
+    function chooseAccount(index) {
+        if (index < 0 || index >= accountsModel.count) return;
+        var keyId = accountsModel.get(index).keyId;
+        if (keyId === root.myAddress) return;
+        root.lastError = "";
+        root.log("selectAccount(" + keyId + ")");
+        logos.watch(backend.selectAccount(keyId), function (err) {
+            // Put the combo back where the backend actually is when the switch
+            // didn't take — leaving it on the failed pick would misreport who
+            // the next post is signed by.
+            if (err) { root.lastError = err; root.syncAccountCombo(); }
+        }, function (e) { root.lastError = e; root.syncAccountCombo(); });
+    }
+
+    function submitCreateAccount() {
+        root.accountError = "";
+        var label = newAccountField.text;
+        root.log("createAccount(\"" + label + "\")");
+        logos.watch(backend.createAccount(label), function (err) {
+            if (err) { root.accountError = err; root.log("createAccount error -> " + err); }
+            else { newAccountField.text = ""; createAccountDialog.close(); }
+        }, function (e) { root.accountError = e; });
+    }
+
+    function submitRenameAccount() {
+        if (renameAccountField.text.length === 0) return;
+        root.accountError = "";
+        var keyId = root.myAddress, label = renameAccountField.text;
+        root.log("renameAccount(" + keyId + ")");
+        logos.watch(backend.renameAccount(keyId, label), function (err) {
+            if (err) { root.accountError = err; root.log("renameAccount error -> " + err); }
+            else { renameAccountDialog.close(); }
+        }, function (e) { root.accountError = e; });
+    }
+
+    function submitDeleteAccount() {
+        root.accountError = "";
+        var keyId = root.myAddress;
+        root.log("deleteAccount(" + keyId + ")");
+        logos.watch(backend.deleteAccount(keyId), function (err) {
+            if (err) { root.accountError = err; root.log("deleteAccount error -> " + err); }
+            else { deleteAccountDialog.close(); }
+        }, function (e) { root.accountError = e; });
     }
 
     function sendReply() {
@@ -256,6 +400,194 @@ Item {
         }
     }
 
+    // ── Account menu + dialogs ────────────────────────────────────────────────
+    // All three act on the *selected* account — the one named in the combo they
+    // hang off. Popups aren't Items, so declaring them here keeps them out of
+    // the layouts above.
+
+    LogosMenu {
+        id: accountMenu
+        LogosMenuItem {
+            text: "Rename…"
+            onTriggered: {
+                renameAccountField.text = root.myLabel;
+                renameAccountDialog.open();
+            }
+        }
+        LogosMenuItem {
+            text: "Delete…"
+            // Deleting the last account would leave nothing to post as, and the
+            // backend refuses it — don't offer it.
+            enabled: accountsModel.count > 1
+            onTriggered: deleteAccountDialog.open()
+        }
+    }
+
+    LogosDialog {
+        id: createAccountDialog
+        onOpened: root.accountError = ""
+        title: "New account"
+        anchors.centerIn: parent
+        modal: true
+        closePolicy: Popup.CloseOnEscape
+
+        ColumnLayout {
+            spacing: Theme.spacing.small
+            LogosText {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 320
+                text: "Mints a new signing key and switches to it. Posts already on screen keep the account that signed them."
+                color: Theme.palette.textSecondary
+                font.pixelSize: Theme.typography.secondaryText
+                wrapMode: Text.WordWrap
+            }
+            LogosTextField {
+                id: newAccountField
+                Layout.fillWidth: true
+                placeholderText: "Name (optional)"
+                Component.onCompleted: textInput.activeFocusOnTab = true
+            }
+            Connections {
+                target: newAccountField.textInput
+                function onAccepted() { root.submitCreateAccount() }
+            }
+            LogosText {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 320
+                visible: root.accountError.length > 0
+                text: "⚠ " + root.accountError
+                color: Theme.palette.error
+                font.pixelSize: Theme.typography.secondaryText
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        rightActions: [
+            FocusButton {
+                text: "Cancel"
+                implicitWidth: 88
+                implicitHeight: 36
+                onClicked: createAccountDialog.close()
+            },
+            FocusButton {
+                text: "Create"
+                implicitWidth: 88
+                implicitHeight: 36
+                onClicked: root.submitCreateAccount()
+            }
+        ]
+    }
+
+    LogosDialog {
+        id: renameAccountDialog
+        onOpened: root.accountError = ""
+        title: "Rename account"
+        anchors.centerIn: parent
+        modal: true
+        closePolicy: Popup.CloseOnEscape
+
+        ColumnLayout {
+            spacing: Theme.spacing.small
+            LogosText {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 320
+                text: "A display name only — the signing key is unchanged, so this doesn't affect anything already posted."
+                color: Theme.palette.textSecondary
+                font.pixelSize: Theme.typography.secondaryText
+                wrapMode: Text.WordWrap
+            }
+            LogosTextField {
+                id: renameAccountField
+                Layout.fillWidth: true
+                placeholderText: "Account name"
+                Component.onCompleted: textInput.activeFocusOnTab = true
+            }
+            Connections {
+                target: renameAccountField.textInput
+                function onAccepted() { root.submitRenameAccount() }
+            }
+            LogosText {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 320
+                visible: root.accountError.length > 0
+                text: "⚠ " + root.accountError
+                color: Theme.palette.error
+                font.pixelSize: Theme.typography.secondaryText
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        rightActions: [
+            FocusButton {
+                text: "Cancel"
+                implicitWidth: 88
+                implicitHeight: 36
+                onClicked: renameAccountDialog.close()
+            },
+            FocusButton {
+                text: "Rename"
+                implicitWidth: 88
+                implicitHeight: 36
+                enabled: renameAccountField.text.length > 0
+                onClicked: root.submitRenameAccount()
+            }
+        ]
+    }
+
+    LogosDialog {
+        id: deleteAccountDialog
+        onOpened: root.accountError = ""
+        title: "Delete account?"
+        anchors.centerIn: parent
+        modal: true
+        closePolicy: Popup.CloseOnEscape
+
+        ColumnLayout {
+            spacing: Theme.spacing.small
+            LogosText {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 320
+                text: "\u201C" + root.myLabel + "\u201D (" + root.shortAddress(root.myAddress) + ")"
+                color: Theme.palette.text
+                font.pixelSize: Theme.typography.primaryText
+                font.family: root.monoFont
+                wrapMode: Text.WordWrap
+            }
+            LogosText {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 320
+                text: "Its signing key is destroyed permanently — this can't be undone, and nothing can be signed as this account again. Posts it already made stay on other people's screens."
+                color: Theme.palette.warning
+                font.pixelSize: Theme.typography.secondaryText
+                wrapMode: Text.WordWrap
+            }
+            LogosText {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 320
+                visible: root.accountError.length > 0
+                text: "⚠ " + root.accountError
+                color: Theme.palette.error
+                font.pixelSize: Theme.typography.secondaryText
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        rightActions: [
+            FocusButton {
+                text: "Cancel"
+                implicitWidth: 88
+                implicitHeight: 36
+                onClicked: deleteAccountDialog.close()
+            },
+            FocusButton {
+                text: "Delete"
+                implicitWidth: 88
+                implicitHeight: 36
+                onClicked: root.submitDeleteAccount()
+            }
+        ]
+    }
+
     // ── Layout ──────────────────────────────────────────────────────────────────
     // Fill the view with the theme background — the host window is transparent
     // underneath, so every screen paints its own surface.
@@ -287,15 +619,59 @@ Item {
             color: root.nodeReady ? Theme.palette.success : Theme.palette.warning
             font.pixelSize: Theme.typography.secondaryText
         }
-        LogosText {
-            // Own signing identity — a fresh keypair minted on first run and
-            // persisted locally thereafter (see ensureIdentity() in the backend).
-            text: root.myAddress.length > 0
-                  ? "Posting as " + root.shortAddress(root.myAddress)
-                  : "Preparing identity…"
-            color: Theme.palette.textTertiary
-            font.pixelSize: Theme.typography.secondaryText
-            font.family: root.monoFont
+        // Own signing identity. This install can hold several accounts — each a
+        // keystore_signer key minted on demand (see loadAccounts() in the
+        // backend) — and exactly one signs from here on. Switching leaves posts
+        // already on screen alone: they keep the author they were signed with,
+        // which is the honest thing to show.
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.spacing.small
+
+            LogosText {
+                text: root.myAddress.length > 0 ? "Posting as" : "Preparing identity…"
+                color: Theme.palette.textTertiary
+                font.pixelSize: Theme.typography.secondaryText
+            }
+            LogosComboBox {
+                id: accountCombo
+                visible: root.myAddress.length > 0
+                enabled: root.ready
+                model: accountsModel
+                textRole: "display"
+                Layout.preferredWidth: 240
+                activeFocusOnTab: true
+                // onActivated (a user pick) only — currentIndex also moves when
+                // syncAccountCombo() follows the backend, and reacting to that
+                // would loop a switch back into the backend that made it.
+                onActivated: function (index) { root.chooseAccount(index) }
+            }
+            FocusButton {
+                visible: root.myAddress.length > 0
+                text: "New"
+                Layout.preferredWidth: 72
+                Layout.preferredHeight: 32
+                implicitWidth: 72
+                implicitHeight: 32
+                enabled: root.ready
+                onClicked: {
+                    newAccountField.text = "";
+                    createAccountDialog.open();
+                }
+            }
+            FocusButton {
+                id: accountMenuButton
+                visible: root.myAddress.length > 0
+                text: "⋯"
+                Layout.preferredWidth: 40
+                Layout.preferredHeight: 32
+                implicitWidth: 40
+                implicitHeight: 32
+                enabled: root.ready
+                onClicked: accountMenu.popup(accountMenuButton, 0, accountMenuButton.height)
+            }
+            // Soak up the remaining width so the controls stay left-aligned.
+            Item { Layout.fillWidth: true }
         }
         LogosText {
             visible: root.lastError.length > 0
@@ -414,6 +790,7 @@ Item {
                                           ? model.replies + (model.replies === 1 ? " reply · awaiting topic…" : " replies · awaiting topic…")
                                           : model.replies + (model.replies === 1 ? " reply · " : " replies · ") + model.ts
                                               + (model.author ? " · by " + root.shortAddress(model.author) : "")
+                                              + root.deliveryMark(model.delivery)
                                     color: Theme.palette.textTertiary
                                     font.pixelSize: Theme.typography.secondaryText
                                     elide: Text.ElideRight
@@ -533,6 +910,7 @@ Item {
                             spacing: 1
                             LogosText {
                                 text: model.ts + (model.author ? " · by " + root.shortAddress(model.author) : "")
+                                      + root.deliveryMark(model.delivery)
                                 color: Theme.palette.textTertiary
                                 font.pixelSize: Theme.typography.secondaryText
                                 font.family: root.monoFont
