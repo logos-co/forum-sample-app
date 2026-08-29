@@ -1,6 +1,10 @@
 #include "example_forum_backend.h"
 
+#include <algorithm>
 #include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include <QByteArray>
 #include <QCryptographicHash>
@@ -28,6 +32,13 @@
 #include "logos_call_error.h"
 #include "logos_sdk.h"
 #include "logos_types.h"
+
+// The vendored local-first engine (lib/, from cloud-data-module) and the two
+// Qt-typed adapters that bind it to this app's delivery_module/storage_module
+// dependencies.
+#include "cloud_data_core/sync_engine.h"
+#include "delivery_module_transport.h"
+#include "storage_module_blob_store.h"
 
 // Injected by CMake from metadata.json#version. Guard so the file still compiles
 // (as an "unknown" version) if the definition is ever missing.
@@ -95,10 +106,13 @@ bool writeTextFile(const QString &path, const QString &contents) {
 }
 } // namespace
 
-// A LIP-23 content topic (https://lip.logos.co/messaging/informational/23/topics.html).
-// Hard-coded so every instance of this app shares one forum.
-const QString ExampleForumBackend::kTopic =
-    QStringLiteral("/example-forum/1/forum/proto");
+// The LIP-23 content-topic app segment
+// (https://lip.logos.co/messaging/informational/23/topics.html) and the two
+// collections posts live in. The engine derives one topic per collection from
+// these (kBucketBytes == 0), so every instance of this app shares one forum.
+const char ExampleForumBackend::kAppName[] = "example-forum";
+const char ExampleForumBackend::kTopicsCollection[] = "topics";
+const char ExampleForumBackend::kRepliesCollection[] = "replies";
 
 ExampleForumBackend::ExampleForumBackend() {
   // Runs in the ui-host process before the context is wired.
@@ -113,7 +127,13 @@ ExampleForumBackend::~ExampleForumBackend() {
 
 void ExampleForumBackend::onContextReady() {
   logEvent("onContextReady — context wired, scheduling node bootstrap");
-  setTopic(kTopic);
+  // Both collection topics, for display. Derived rather than written out, so
+  // the line on screen can't drift from what the engine actually joins.
+  setTopic(QStringLiteral("%1 + %2")
+               .arg(QString::fromStdString(cloud_data_core::sync_engine::contentTopicForDoc(
+                        kAppName, 1, kTopicsCollection, QString().toStdString(), kBucketBytes)),
+                    QString::fromStdString(cloud_data_core::sync_engine::contentTopicForDoc(
+                        kAppName, 1, kRepliesCollection, QString().toStdString(), kBucketBytes))));
 
   // createNode()/start() are synchronous and can block for a moment. Defer the
   // bootstrap to the next event-loop turn so onContextReady() returns and the
@@ -138,22 +158,35 @@ void ExampleForumBackend::bootstrap() {
         refreshStatus();
       });
 
-  // Inbound forum messages on the subscribed topic. data[2] is the raw payload
-  // bytes (a JSON ForumMessage envelope); data[3] is the timestamp (qint64, ns
-  // since epoch). Non-forum payloads are ignored.
+  // Inbound CRDT ops. data[1] is the content topic, data[2] the raw payload.
+  // The engine routes on topic shape (regular ops vs snapshot pointers),
+  // merges by op id, and reports anything that actually changed through
+  // handleDocumentChanged — so payloads that aren't ours are dropped there
+  // rather than here.
   modules().delivery_module.on(
       "messageReceived", [this](const QVariantList &data) {
-        if (data.size() < 4)
+        if (data.size() < 3 || !m_engine)
           return;
-        ForumMessage msg;
-        if (!decodeForumMessage(data.at(2).toByteArray(), msg)) {
-          logEvent("ignored non-forum message on " +
-                   data.at(1).toString().toStdString());
+        const QByteArray payload = data.at(2).toByteArray();
+        m_engine->handleIncomingMessage(
+            data.at(1).toString().toStdString(),
+            std::vector<uint8_t>(payload.begin(), payload.end()));
+      });
+
+  // Registered alongside — not instead of — the handler above: the engine
+  // prefers a reliable channel and latches back to plain send/subscribe only
+  // once channelCreate() fails, and a host-owned node can be either. Both
+  // paths are idempotent by op id, so an op arriving on both merges once.
+  // data[0] is the channel id, which the engine sets to the content topic, so
+  // the same routing applies.
+  modules().delivery_module.on(
+      "channelMessageReceived", [this](const QVariantList &data) {
+        if (data.size() < 3 || !m_engine)
           return;
-        }
-        logEvent("received " + msg.type.toStdString() +
-                 " id=" + msg.id.toStdString());
-        emitForumMessage(msg, data.at(3).toLongLong());
+        const QByteArray payload = data.at(2).toByteArray();
+        m_engine->handleIncomingMessage(
+            data.at(0).toString().toStdString(),
+            std::vector<uint8_t>(payload.begin(), payload.end()));
       });
 
   // Node startup. start() is dispatch-only in delivery_module v0.2.1 — its
@@ -183,33 +216,104 @@ void ExampleForumBackend::bootstrap() {
     QTimer::singleShot(0, [this]() { subscribeToForum(); });
   });
 
-  // Delivery outcomes for our own posts, keyed by the request id send() hands
-  // back. publish()'s local echo is a claim that we tried, not evidence that
-  // anything left the machine; these events are what settle it.
+  // Delivery outcomes for our own posts, keyed by the request id the transport
+  // hands back (see notePublished, which maps it to the post it carried). A
+  // successful put() means the post is safe on disk and queued, not that it
+  // left the machine; these events are what settle that second question.
+  //
+  // They do double duty now: as well as driving the view's per-post state,
+  // they resolve the engine's outbox row for that request id. Until a row is
+  // resolved the engine keeps re-issuing it on the next put/subscribe, so
+  // skipping these would mean every op re-sent forever.
   modules().delivery_module.on(
       "messagePropagated", [this](const QVariantList &data) {
+        // A waypoint, not an outcome — reported to the view, but the outbox
+        // row stays open until the send is settled either way.
         settleSend(data.value(0).toString(), QStringLiteral("propagated"),
                    QString());
       });
   modules().delivery_module.on("messageSent", [this](const QVariantList &data) {
-    settleSend(data.value(0).toString(), QStringLiteral("sent"), QString());
+    const QString requestId = data.value(0).toString();
+    settleSend(requestId, QStringLiteral("sent"), QString());
+    if (m_engine)
+      m_engine->onOutboxResolved(requestId.toStdString(), true);
   });
   modules().delivery_module.on(
       "messageError", [this](const QVariantList &data) {
-        settleSend(data.value(0).toString(), QStringLiteral("failed"),
-                   data.value(2).toString());
+        const QString requestId = data.value(0).toString();
+        settleSend(requestId, QStringLiteral("failed"), data.value(2).toString());
+        if (m_engine)
+          m_engine->onOutboxResolved(requestId.toStdString(), false);
       });
+
+  // The same bookkeeping for the reliable-channel path. Here data[0] is the
+  // channel id and data[1] the request id (the plain-send events lead with the
+  // request id instead), and the error string moves to data[2].
+  modules().delivery_module.on(
+      "channelMessageSent", [this](const QVariantList &data) {
+        const QString requestId = data.value(1).toString();
+        settleSend(requestId, QStringLiteral("sent"), QString());
+        if (m_engine)
+          m_engine->onOutboxResolved(requestId.toStdString(), true);
+      });
+  modules().delivery_module.on(
+      "channelMessageError", [this](const QVariantList &data) {
+        const QString requestId = data.value(1).toString();
+        settleSend(requestId, QStringLiteral("failed"), data.value(2).toString());
+        if (m_engine)
+          m_engine->onOutboxResolved(requestId.toStdString(), false);
+      });
+
+  // --- storage_module events -> the engine's snapshot bridge ----------------
+  // The blob-store adapter owns storage_module's wire format, so what reaches
+  // the engine is already a parsed (success, sessionId, bytes). Inert unless
+  // the user has a storage node up: this app never starts one (see openEngine).
+  modules().storage_module.onStorageUploadProgress([this](const QString &payload) {
+    if (!m_engine)
+      return;
+    const auto ev = StorageModuleBlobStore::parseUploadProgress(payload.toStdString());
+    m_engine->onBlobUploadProgress(ev.success, ev.sessionId);
+  });
+  modules().storage_module.onStorageDownloadProgress([this](const QString &payload) {
+    if (!m_engine)
+      return;
+    const auto ev = StorageModuleBlobStore::parseDownloadProgress(payload.toStdString());
+    m_engine->onBlobDownloadProgress(ev.success, ev.sessionId, ev.chunk);
+  });
+  modules().storage_module.onStorageDownloadDone([this](const QString &payload) {
+    if (!m_engine)
+      return;
+    const auto ev = StorageModuleBlobStore::parseDownloadDone(payload.toStdString());
+    m_engine->onBlobDownloadDone(ev.success, ev.sessionId);
+  });
 
   // --- Open/create this install's signing accounts ---------------------------
   // Independent of the delivery node below; publish() gates on both being
   // ready (nodeReady() and a selected account).
   loadAccounts();
 
+  // --- Open the local store and replay what it holds -------------------------
+  // Before the node, deliberately: local reads and writes never touch the
+  // network, so the forum can be populated and composable while the node is
+  // still bootstrapping — or when it never comes up at all.
+  if (!openEngine()) {
+    setStatus(QStringLiteral("Local store unavailable — posts can't be saved"));
+    return;
+  }
+
   // --- Create + start the node against the logos.test fleet -----------------
-  // No ports specified: delivery_module defaults them to 0, so the OS assigns
-  // free ports.
+  // The *layered* config shape: `mode` and `preset` are both keys the layered
+  // parser consumes, which is what earns the structured defaults — ephemeral
+  // p2p ports, plus the host's per-instance localStoragePath. Adding any bare
+  // WakuNodeConf key at the top level (logLevel, tcpPort, relay, …) flips
+  // delivery's isFlatShape() check and reclassifies the whole config as the
+  // legacy flat shape, which since delivery v0.2.0 no longer zeroes the
+  // listening ports — it binds upstream's fixed defaults (tcp 60000), so two
+  // instances on one machine collide. `logLevel` used to sit here and did
+  // exactly that. Tuning keys belong inside messagingOverrides /
+  // channelsOverrides / kernelConf instead; getAvailableConfigs() reports
+  // what the running module accepts.
   const QJsonObject cfg{
-      {"logLevel", "INFO"},
       {"mode", "Core"},
       {"preset", "logos.test"},
   };
@@ -252,27 +356,35 @@ void ExampleForumBackend::subscribeToForum() {
   if (m_subscribed)
     return; // the pre-start attempt and nodeStarted can both land
 
+  if (!m_engine)
+    return; // nothing to subscribe with yet; openEngine() drives the first try
+
   ++m_subscribeAttempts;
-  LogosResult subscribed = modules().delivery_module.subscribe(kTopic);
-  if (!subscribed.success) {
-    setStatus(QStringLiteral("subscribe failed: %1").arg(subscribed.getError()));
+  // One call per collection. The doc id is irrelevant to the topic at
+  // kBucketBytes == 0 (see the header), so a sentinel stands in for it — what
+  // this actually joins is the whole collection, which is what a forum needs:
+  // posts arrive from peers whose doc ids we have never seen.
+  const cloud_data_core::EngineResult topics =
+      m_engine->subscribe(kTopicsCollection, "*");
+  const cloud_data_core::EngineResult replies =
+      m_engine->subscribe(kRepliesCollection, "*");
+  if (!topics.success || !replies.success) {
+    const std::string detail = topics.success ? replies.error : topics.error;
+    setStatus(QStringLiteral("subscribe failed: %1")
+                  .arg(QString::fromStdString(detail)));
     logEvent("subscribe attempt " + std::to_string(m_subscribeAttempts) +
-             " failed: " + subscribed.getError().toStdString());
-    // Retry rather than leaving the app receiving nothing with composing
-    // disabled. The common failure here is a timeout because the node is busy
-    // bootstrapping, which passes on its own.
+             " failed: " + detail);
+    // Retry rather than leaving the app receiving nothing. The common failure
+    // here is a timeout because the node is busy bootstrapping, which passes
+    // on its own. Composing is unaffected — that runs off the local store.
     if (m_subscribeAttempts < kMaxSubscribeAttempts)
       QTimer::singleShot(kSubscribeRetryMs, [this]() { subscribeToForum(); });
     return;
   }
 
   m_subscribed = true;
-  // Composing is gated on nodeReady, and a subscribed node can publish before
-  // it has any peers to relay for it, so a successful subscribe is the right
-  // gate. Connectivity is a separate question, reported through the status PROP.
-  setNodeReady(true);
   refreshStatus();
-  logEvent("subscribed — forum on " + kTopic.toStdString());
+  logEvent("subscribed — forum on the topics + replies collections");
 }
 
 void ExampleForumBackend::refreshStatus() {
@@ -725,14 +837,14 @@ QString ExampleForumBackend::publish(ForumMessage msg) {
            " nodeReady=" + std::to_string(nodeReady()) +
            " myKeyId=" + (m_keyId.isEmpty() ? "<empty>" : m_keyId.toStdString()));
 
-  if (!isContextReady() || !nodeReady())
-    return QStringLiteral("Node not ready");
+  if (!isContextReady() || !m_engine)
+    return QStringLiteral("Store not ready");
   if (m_keyId.isEmpty())
     return QStringLiteral("Identity not ready");
 
   // Sign the canonical payload (Keccak-256, matching go-wallet-sdk's
-  // go-ethereum-derived signing convention) before encoding — author/sig must
-  // be set on msg itself so encodeForumMessage() carries them on the wire.
+  // go-ethereum-derived signing convention) before storing — author/sig must
+  // be set on msg itself so they land in the document the engine syncs.
   msg.author = m_keyId;
   const QByteArray signingBytes = forumMessageSigningBytes(msg);
   const QByteArray hash = QCryptographicHash::hash(signingBytes,
@@ -761,25 +873,239 @@ QString ExampleForumBackend::publish(ForumMessage msg) {
   // Convert signature bytes to hex string for JSON wire format.
   msg.sig = QStringLiteral("0x") + QString::fromLatin1(sigBytes.toHex());
 
-  LogosResult r = modules().delivery_module.send(kTopic, encodeForumMessage(msg));
-  if (!r.success) {
-    logEvent("send failed: " + r.getError().toStdString());
-    return r.getError();
-  }
-  const QString requestId = r.getString();
-  m_pendingSends.insert(requestId, msg.id);
-  logEvent("published " + msg.type.toStdString() + " id=" + msg.id.toStdString() +
-           ", requestId=" + requestId.toStdString());
+  // The document the engine stores and syncs. `ts` is a *string* deliberately:
+  // it is nanoseconds since the epoch (~1.7e18), which a JSON number would
+  // round, since that exceeds the 2^53 a double represents exactly.
+  const bool isTopic = msg.type == QLatin1String("topic");
+  QJsonObject doc{
+      {"type", msg.type},
+      {"body", msg.body},
+      {"author", msg.author},
+      {"sig", msg.sig},
+      {"ts", QString::number(nowNs())},
+  };
+  if (isTopic)
+    doc.insert("title", msg.title);
+  else
+    doc.insert("topicId", msg.topicId);
 
-  // Local echo — the relay won't loop our own message back, so surface it now.
-  // The id lets the QML view de-dupe if the network ever does echo it.
-  emitForumMessage(msg, nowNs());
-  // ...and immediately mark it unconfirmed. A successful send() means the
-  // module accepted the message locally and nothing more, so on its own the
-  // echo above would render a post that never left the machine exactly like a
-  // delivered one. settleSend() resolves this from the delivery events.
+  const std::string collection = isTopic ? kTopicsCollection : kRepliesCollection;
+  const cloud_data_core::EngineResult r = m_engine->put(
+      collection, msg.id.toStdString(),
+      QString::fromUtf8(QJsonDocument(doc).toJson(QJsonDocument::Compact))
+          .toStdString());
+  if (!r.success) {
+    logEvent("put failed: " + r.error);
+    return QString::fromStdString(r.error);
+  }
+  logEvent("stored " + msg.type.toStdString() + " id=" + msg.id.toStdString());
+
+  // No local echo: put() already reported the write through
+  // handleDocumentChanged() before returning, so the post is on screen.
+  //
+  // Mark it unconfirmed all the same. The write is durable locally the moment
+  // put() succeeds, but that says nothing about whether it left the machine —
+  // the engine parks it in an outbox and retries. settleSend() resolves this
+  // once delivery_module reports what became of the broadcast.
   emit messageStateChanged(msg.id, QStringLiteral("pending"), QString());
   return QString(); // empty == success
+}
+
+bool ExampleForumBackend::openEngine() {
+  // Sit beside the identity in the same per-instance data tree (see
+  // identityDir()'s doc comment), so the store follows the keystore whose keys
+  // signed its posts rather than drifting into another Basecamp instance's.
+  QString dir = identityDir();
+  dir.chop(QStringLiteral("/identity").size());
+  dir += QStringLiteral("/store");
+  QDir().mkpath(dir);
+
+  // A stable per-install peer id. It tie-breaks concurrent CRDT writes and
+  // namespaces op ids, so it has to survive a restart — and deliberately is
+  // *not* the selected account, which the user can switch or delete without
+  // meaning to fork this install's op history.
+  const QString peerIdFile = dir + QStringLiteral("/peer_id");
+  QString peerId = readTextFile(peerIdFile);
+  if (peerId.isEmpty()) {
+    peerId = newId();
+    if (!writeTextFile(peerIdFile, peerId)) {
+      logEvent("failed to persist peer id under " + dir.toStdString());
+      return false;
+    }
+  }
+
+  m_transport = std::make_unique<DeliveryModuleTransport>(modules());
+  m_blobStore = std::make_unique<StorageModuleBlobStore>(modules());
+
+  cloud_data_core::EngineConfig cfg;
+  // The app segment of every topic the engine derives, which is what keeps
+  // this forum's traffic off any other embedder's topics.
+  cfg.appName = kAppName;
+  cfg.bucketBytes = kBucketBytes;
+
+  m_engine = std::make_unique<cloud_data_core::CloudDataEngine>(
+      dir.toStdString(), peerId.toStdString(), cfg, *m_transport, *m_blobStore);
+  if (!m_engine->open()) {
+    logEvent("could not open the local store under " + dir.toStdString());
+    m_engine.reset();
+    return false;
+  }
+
+  // One path for every materialized change, whatever caused it: a local put,
+  // a merged remote op, or a row replayed from disk below. `origin` is
+  // deliberately ignored — the view renders its own posts and everyone else's
+  // identically, and its de-dupe by id makes a repeat harmless.
+  m_engine->setOnDocumentChanged([this](const std::string &collectionId,
+                                        const std::string &docId,
+                                        const std::string &json,
+                                        const std::string &origin) {
+    (void)origin;
+    handleDocumentChanged(collectionId, docId, json);
+  });
+  m_transport->setPublishObserver(
+      [this](const std::string &requestId, const std::vector<uint8_t> &payload) {
+        notePublished(requestId, payload);
+      });
+
+  logEvent("local store open at " + dir.toStdString() +
+           ", peer " + peerId.toStdString());
+  // Nothing is pushed to the view here: its replica does not exist yet. The
+  // view pulls the backlog itself via loadBacklog() once it is ready.
+
+  // Composing runs off the local store, not the network: put() is durable and
+  // queued for broadcast whether or not a node ever comes up. Gating this on a
+  // successful subscribe — which is what it did before there was a store —
+  // would now refuse posts the app can keep perfectly well. Connectivity stays
+  // a separate question, reported through the status PROP.
+  setNodeReady(true);
+  return true;
+}
+
+QString ExampleForumBackend::loadBacklog() {
+  if (!m_engine)
+    return QStringLiteral("[]");
+
+  QJsonArray backlog;
+  // Topics before replies, so the view never has to stand up a placeholder for
+  // a topic that is a few entries further down the same array.
+  for (const char *collection : {kTopicsCollection, kRepliesCollection}) {
+    const cloud_data_core::EngineResult r = m_engine->query(collection, "{}");
+    if (!r.success) {
+      logEvent(std::string("backlog query of ") + collection + " failed: " + r.error);
+      continue;
+    }
+    if (!r.value.is_array())
+      continue;
+
+    // SQLite hands rows back in no particular order, so sort by the post's own
+    // timestamp — otherwise a restart would shuffle every thread into storage
+    // order.
+    std::vector<std::pair<qint64, const nlohmann::json *>> rows;
+    for (const auto &row : r.value) {
+      if (!row.is_object() || !row.contains("docId") || !row["docId"].is_string())
+        continue;
+      qint64 ts = 0;
+      if (row.contains("ts") && row["ts"].is_string())
+        ts = QString::fromStdString(row["ts"].get<std::string>()).toLongLong();
+      rows.emplace_back(ts, &row);
+    }
+    std::stable_sort(rows.begin(), rows.end(),
+                     [](const auto &a, const auto &b) { return a.first < b.first; });
+
+    const bool isTopics = collection == std::string(kTopicsCollection);
+    for (const auto &[ts, row] : rows) {
+      const QJsonDocument doc =
+          QJsonDocument::fromJson(QByteArray::fromStdString(row->dump()));
+      if (!doc.isObject())
+        continue;
+      const QJsonObject obj = doc.object();
+      if (obj.value(QStringLiteral("$deleted")).toBool())
+        continue;
+
+      QJsonObject entry{
+          {"kind", isTopics ? QStringLiteral("topic") : QStringLiteral("reply")},
+          {"id", obj.value(QStringLiteral("docId")).toString()},
+          {"body", obj.value(QStringLiteral("body")).toString()},
+          {"author", obj.value(QStringLiteral("author")).toString()},
+          {"ts", QString::number(ts)},
+      };
+      if (isTopics) {
+        const QString title = obj.value(QStringLiteral("title")).toString();
+        if (title.isEmpty())
+          continue; // a topic must have a title
+        entry.insert(QStringLiteral("title"), title);
+      } else {
+        const QString topicId = obj.value(QStringLiteral("topicId")).toString();
+        if (topicId.isEmpty())
+          continue; // a reply must reference its topic
+        entry.insert(QStringLiteral("topicId"), topicId);
+      }
+      backlog.append(entry);
+    }
+  }
+
+  logEvent("backlog: " + std::to_string(backlog.size()) + " persisted post(s)");
+  return QString::fromUtf8(
+      QJsonDocument(backlog).toJson(QJsonDocument::Compact));
+}
+
+void ExampleForumBackend::handleDocumentChanged(const std::string &collectionId,
+                                                 const std::string &docId,
+                                                 const std::string &json) {
+  const QJsonDocument parsed =
+      QJsonDocument::fromJson(QByteArray::fromStdString(json));
+  if (!parsed.isObject())
+    return;
+  const QJsonObject obj = parsed.object();
+  // A removed document still materializes, carrying the engine's reserved
+  // tombstone marker. Nothing in this app deletes posts, but a merged remote
+  // tombstone would otherwise put one back on screen.
+  if (obj.value(QStringLiteral("$deleted")).toBool())
+    return;
+
+  ForumMessage msg;
+  msg.id = QString::fromStdString(docId);
+  msg.body = obj.value(QStringLiteral("body")).toString();
+  // Claimed, not verified — see the .rep's topicReceived doc comment. Carried
+  // as ordinary document fields, so the signature survives the trip through
+  // the store and out to other peers unchanged.
+  msg.author = obj.value(QStringLiteral("author")).toString();
+  msg.sig = obj.value(QStringLiteral("sig")).toString();
+  const qint64 ts = obj.value(QStringLiteral("ts")).toString().toLongLong();
+
+  if (collectionId == kTopicsCollection) {
+    msg.type = QStringLiteral("topic");
+    msg.title = obj.value(QStringLiteral("title")).toString();
+    if (msg.title.isEmpty())
+      return; // a topic must have a title
+  } else if (collectionId == kRepliesCollection) {
+    msg.type = QStringLiteral("reply");
+    msg.topicId = obj.value(QStringLiteral("topicId")).toString();
+    if (msg.topicId.isEmpty())
+      return; // a reply must reference its topic
+  } else {
+    return; // not a collection this app knows
+  }
+
+  emitForumMessage(msg, ts != 0 ? ts : nowNs());
+}
+
+void ExampleForumBackend::notePublished(const std::string &requestId,
+                                         const std::vector<uint8_t> &payload) {
+  if (requestId.empty())
+    return;
+
+  // The op carries the doc id, which is the message id the view knows a post
+  // by — so decoding what was just published is what links a delivery request
+  // id back to a row on screen. Anything that isn't an op (a snapshot pointer,
+  // say) is not something the view tracks per-post.
+  std::string collectionId;
+  cloud_data_core::CrdtOp op;
+  if (!cloud_data_core::sync_engine::decodeOp(payload, collectionId, op))
+    return;
+
+  m_pendingSends.insert(QString::fromStdString(requestId),
+                        QString::fromStdString(op.docId));
 }
 
 void ExampleForumBackend::emitForumMessage(const ForumMessage &msg,

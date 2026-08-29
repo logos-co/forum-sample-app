@@ -5,28 +5,38 @@
   "type": "ui_qml",
   "interface": "universal",
   "category": "example",
-  "description": "Example Forum App. No login required to post topics/replies — posts are signed under a per-install identity generated on first run. Post history itself is ephemeral, not persisted.",
+  "description": "Example Forum App. No login required to post topics/replies — posts are signed under a per-install identity generated on first run. Topics and replies persist locally and are restored on restart.",
   "main": "example_forum_plugin",
   "icon": null,
   "view": "qml/Main.qml",
   "dependencies": [
     "delivery_module",
-    "keystore_signer"
+    "keystore_signer",
+    "storage_module"
   ],
   "codegen": {
     "rep": "src/example_forum.rep"
   },
   "nix": {
     "packages": {
-      "build": [],
-      "runtime": []
+      "build": [
+        "sqlite"
+      ],
+      "runtime": [
+        "sqlite",
+        "nlohmann_json"
+      ]
     },
     "external_libraries": [],
     "cmake": {
-      "find_packages": [],
+      "find_packages": [
+        "SQLite3"
+      ],
       "extra_sources": [],
       "extra_include_dirs": [],
-      "extra_link_libraries": []
+      "extra_link_libraries": [
+        "SQLite::SQLite3"
+      ]
     }
   }
 }

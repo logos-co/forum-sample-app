@@ -85,12 +85,51 @@ Item {
         }
     }
 
+    // Posts already in the local store, pulled once the replica is up. This
+    // cannot be a startup signal from the backend: the backend finishes its
+    // bootstrap before this view exists, and QtRO delivers a signal only to
+    // replicas connected at the time it is emitted. So the view asks.
+    property bool backlogLoaded: false
+
+    function loadBacklog() {
+        if (root.backlogLoaded || !root.ready || !root.backend) return;
+        root.backlogLoaded = true;
+        logos.watch(backend.loadBacklog(), function (json) {
+            var list = [];
+            try {
+                list = JSON.parse(json);
+            } catch (e) {
+                root.log("could not parse backlog: " + e);
+                return;
+            }
+            for (var i = 0; i < list.length; ++i) {
+                var e = list[i];
+                var ts = Number(e.ts);
+                if (e.kind === "topic")
+                    root.addTopic(e.id, e.title, e.body, e.author, ts);
+                else if (e.kind === "reply")
+                    root.addReply(e.id, e.topicId, e.body, e.author, ts);
+            }
+            root.log("backlog restored: " + list.length + " post(s)");
+        }, function (err) {
+            root.log("backlog load failed: " + err);
+            // Let a later readiness change try again rather than showing an
+            // empty forum for a store we know has posts in it.
+            root.backlogLoaded = false;
+        });
+    }
+
+    onReadyChanged: root.loadBacklog()
+
     Component.onCompleted: {
         log("Component.onCompleted — view created");
         root.ready = root.backend !== null && logos.isViewModuleReady("example_forum");
         // The replica may already hold accounts by now, in which case
         // onAccountsJsonChanged has come and gone before this view existed.
         root.rebuildAccounts();
+        // Same reasoning, for the stored posts — ready may already be true here,
+        // in which case onReadyChanged has been and gone too.
+        root.loadBacklog();
     }
     Component.onDestruction: log("Component.onDestruction — view torn down")
 
@@ -609,7 +648,7 @@ Item {
             color: Theme.palette.text
         }
         LogosText {
-            text: "Topic: " + (root.topic.length > 0 ? root.topic : "—")
+            text: "Topics: " + (root.topic.length > 0 ? root.topic : "—")
             color: Theme.palette.textSecondary
             font.pixelSize: Theme.typography.secondaryText
             font.family: root.monoFont
@@ -937,7 +976,7 @@ Item {
                     LogosTextField {
                         id: replyField
                         Layout.fillWidth: true
-                        placeholderText: root.nodeReady ? "Write a reply…" : "Waiting for node…"
+                        placeholderText: root.nodeReady ? "Write a reply…" : "Preparing local store…"
                         enabled: root.nodeReady
                         Component.onCompleted: textInput.activeFocusOnTab = true
                     }
