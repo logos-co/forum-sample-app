@@ -1,26 +1,43 @@
 #pragma once
 
+#include <memory>
+
 #include <QHash>
 #include <QString>
 #include <QStringList>
 #include <QVector>
 
+#include "cloud_data_core/engine.h"
+#include "delivery_module_transport.h"
 #include "forum_message.h"
 #include "logos_ui_plugin_context.h"
 #include "rep_example_forum_source.h"
+#include "storage_module_blob_store.h"
 
 /**
  * @brief UI backend for Example Forum (universal authoring model).
  *
- * A single forum runs over one hard-coded delivery content topic (`kTopic`).
- * Every post — a topic creation or a reply — is a JSON `ForumMessage` envelope
- * (see forum_message.h) published with `delivery_module.send` and received via
- * its `messageReceived` event:
+ * Posts live in a local-first CRDT store: `cloud_data_core::CloudDataEngine`
+ * (vendored under lib/, from cloud-data-module) owns an embedded SQLite
+ * database, merges concurrent writes, and syncs over `delivery_module`.
+ * This backend supplies the two adapters that engine needs
+ * (`DeliveryModuleTransport`, `StorageModuleBlobStore`) and translates between
+ * its documents and the view's signals:
  *
- *   - `createTopic` / `replyToTopic` encode an envelope, broadcast it, and
- *     locally echo it (the relay doesn't loop our own messages back).
- *   - inbound payloads are decoded and fanned out to the `topicReceived` /
- *     `replyReceived` signals, which the QML view threads into a forum.
+ *   - `createTopic` / `replyToTopic` sign the post, then `put()` it into the
+ *     `kTopicsCollection` / `kRepliesCollection` collection. The write lands
+ *     locally first and broadcasts second, so a post survives a restart even
+ *     if it never reaches the network.
+ *   - every materialized change — a local `put`, a merged remote op, or a row
+ *     replayed from disk at startup — arrives on one path
+ *     (`handleDocumentChanged`) and fans out to the `topicReceived` /
+ *     `replyReceived` signals the QML view threads into a forum.
+ *   - on startup `replayPersisted()` queries both collections and replays
+ *     everything the store already holds, which is what makes the forum
+ *     survive open/close.
+ *
+ * The engine is what persists; `storage_module` only backs its optional
+ * snapshot bridge, which stays inert unless the user has a storage node up.
  *
  * You write only this class and the `.rep` view contract. The `*Plugin` /
  * `*Interface` classes, `Q_PLUGIN_METADATA`, `initLogos` and QtRO registration
@@ -166,19 +183,51 @@ private:
   // accounts track the keystore_signer instance that holds their keys.
   QString identityDir() const;
 
-  // Encode `msg`, send it on kTopic, then locally echo it (the relay does not
-  // loop our own messages back). Returns "" on success, or an error string.
-  // Signs `msg` (setting its author/sig fields) before encoding with the
-  // selected account; fails if no account is ready yet (see loadAccounts()).
+  // Sign `msg` with the selected account (setting its author/sig fields) and
+  // put() it into its collection. Returns "" on success, or an error string;
+  // fails if no account is ready yet (see loadAccounts()). No local echo is
+  // needed any more — put() reports the write back through
+  // handleDocumentChanged() before it returns.
   QString publish(ForumMessage msg);
+
+  // Build the adapters and the engine, open the local store, and replay what
+  // it already holds. Returns false if the store could not be opened, in which
+  // case composing stays disabled. Called once from bootstrap().
+  bool openEngine();
+
+  // Replay every document already in the local store through the view's
+  // signals. This is what makes the forum survive open/close; runs before the
+  // node is up, so the UI populates without waiting on the network.
+  void replayPersisted();
+
+  // The engine's single report of a materialized document change, whatever
+  // caused it (local put, merged remote op, or startup replay). Decodes the
+  // document and fans it out to topicReceived / replyReceived.
+  void handleDocumentChanged(const std::string &collectionId,
+                             const std::string &docId, const std::string &json);
+
+  // Record which of our posts a delivery request id belongs to, by decoding
+  // the op the transport just published. Feeds settleSend().
+  void notePublished(const std::string &requestId,
+                     const std::vector<uint8_t> &payload);
 
   // Fan a decoded message out to the matching .rep signal (topicReceived for a
   // topic, replyReceived for a reply). `timestamp` is ns since the Unix epoch.
   void emitForumMessage(const ForumMessage &msg, qint64 timestamp);
 
-  // The single LIP-23 content topic this forum lives on, so every instance of
-  // the app shares one forum.
-  static const QString kTopic;
+  // LIP-23 content-topic app segment, and the two collections every post
+  // belongs to. The engine derives the actual topics from these
+  // (`/example-forum/1/<collection>/proto`, unbucketed — see kBucketBytes),
+  // so every instance of the app shares one forum.
+  static const char kAppName[];
+  static const char kTopicsCollection[];
+  static const char kRepliesCollection[];
+
+  // One content topic per collection rather than the engine's default 256
+  // hash buckets: a forum wants every post in a collection, including ones
+  // from peers it has never heard of, which a per-doc bucket cannot deliver.
+  // See cloud_data_core::sync_engine::contentTopicForDoc.
+  static constexpr int kBucketBytes = 0;
 
   // One signing identity: a keystore_signer key id plus the app-side metadata
   // the keystore doesn't hold. `label` is a display name the user can change;
@@ -219,6 +268,12 @@ private:
   // live from the send until the network validates or rejects the message
   // (settleSend()); "propagated" is a waypoint and keeps the entry.
   QHash<QString, QString> m_pendingSends;
+
+  // The local-first store and its two module adapters. Declared in this order
+  // so the engine (which holds references to both) is destroyed first.
+  std::unique_ptr<DeliveryModuleTransport> m_transport;
+  std::unique_ptr<StorageModuleBlobStore> m_blobStore;
+  std::unique_ptr<cloud_data_core::CloudDataEngine> m_engine;
 
   // This install's keystore-signer-module credential (256-bit bearer secret),
   // kept in memory so publish() can pass it to the signing call directly.

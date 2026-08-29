@@ -42,10 +42,12 @@ class ExampleForum
     // delivery_module's connectionStateChanged values (Connected / … ).
     PROP(QString status="Starting…" READONLY)
 
-    // True once the node is up and subscribed to the topic (composing enabled).
+    // True once the local store is open, which is what composing needs: a post
+    // is written and kept locally whether or not the node is up, and queued
+    // for broadcast either way. Node connectivity is reported by `status`.
     PROP(bool nodeReady=false READONLY)
 
-    // The hard-coded content topic this forum runs on (for display).
+    // The content topics this forum's collections run on (for display).
     PROP(QString topic="" READONLY)
 
     // App version, sourced from metadata.json at build time (for display).

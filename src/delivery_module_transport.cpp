@@ -1,13 +1,13 @@
 #include "delivery_module_transport.h"
 
+#include <utility>
+
 #include <QByteArray>
 #include <QJsonDocument>
 #include <QString>
 #include <QVariant>
 
 #include <nlohmann/json.hpp>
-
-#include <utility>
 
 #include "base64.h"
 #include "logos_sdk.h"

@@ -40,24 +40,37 @@ createNode(cfgJson)  →  start()  →  subscribe(topic) / send(topic, payload) 
 read `.getError()` on failure, `.getString()` for the value (e.g. `send`'s
 request id). `createNode` is called **once per node**; subsequent calls fail.
 
-### `createNode` config — flat JSON of WakuNodeConf keys
+### `createNode` config — use the *layered* shape
 
 Only non-default keys are needed. A `preset` auto-populates cluster id, entry
-nodes, sharding and RLN. Minimal, network-ready:
+nodes, sharding and RLN. Minimal, network-ready — this is the "App developer"
+shape from `delivery_module.lidl`:
 
 ```json
-{ "logLevel": "INFO", "mode": "Core", "preset": "logos.test" }
+{ "mode": "Core", "preset": "logos.test" }
 ```
 
 | Key | Values | Notes |
 |---|---|---|
 | `preset` | `logos.test` (default fleet), `logos.dev`, `twn` | picks cluster/bootstrap/shards |
 | `mode` | `Core` (full relay), `Edge` (light), `noMode` | |
-| `logLevel` | `TRACE`/`DEBUG`/`INFO`/`WARN` | |
+| `entryLayer` | `kernel`, `messaging`, `channels` (default) | how much of the stack is mounted |
 
-**Omit ports.** Unspecified ports default to `0`, so the OS assigns free ones and
-multiple instances on one machine coexist without collisions (the basis for
-running two app instances and messaging between them).
+**Keep bare `WakuNodeConf` keys out of the top level.** `logLevel`, `tcpPort`,
+`relay` and friends flip delivery's `isFlatShape()` check, which reclassifies the
+whole config as the pre-layered flat shape. That shape still parses and boots,
+but since delivery v0.2.0 it no longer zeroes the listening ports — it binds
+upstream's fixed defaults (tcp 60000), so **two instances on one machine
+collide**. Ephemeral ports and the host's per-instance `localStoragePath` are
+structured defaults you only get on the layered path.
+
+Put tuning inside `messagingOverrides` / `channelsOverrides` / `kernelConf`:
+
+```json
+{ "entryLayer": "kernel", "kernelConf": { "preset": "logos.test", "relay": true } }
+```
+
+`getAvailableConfigs()` reports what the running module actually accepts.
 
 ## Content topics
 

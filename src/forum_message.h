@@ -4,15 +4,16 @@
 #include <QString>
 
 /**
- * @brief A single forum message carried over the broadcast topic.
+ * @brief One forum post, in memory.
  *
- * All forum traffic — topic creations and replies — shares the one delivery
- * content topic (ExampleForumBackend::kTopic). Each message is a small JSON
- * envelope whose `type` distinguishes a new topic from a reply, and whose
+ * A plain carrier between the backend's signing/publish path, the local store,
+ * and the view's signals: `type` distinguishes a new topic from a reply, and
  * `id`/`topicId` thread replies under their topic.
  *
- * encodeForumMessage() / decodeForumMessage() own that wire format so the
- * backend, the delivery transport, and the QML view stay decoupled from it.
+ * It is no longer a wire format. Posts travel as CRDT ops over
+ * cloud_data_core (see ExampleForumBackend), which owns their encoding; what
+ * survives here is the part this app owns — the canonical bytes a post's
+ * signature covers, and the content-addressed derivation of a topic's id.
  */
 struct ForumMessage {
   int version = 1;
@@ -41,11 +42,3 @@ QByteArray forumMessageSigningBytes(const ForumMessage &msg);
 // of the id and cannot be recovered from it.
 QString topicIdFor(const QString &title);
 
-// Serialise to a compact UTF-8 JSON envelope, ready for delivery_module.send().
-QByteArray encodeForumMessage(const ForumMessage &msg);
-
-// Parse a payload produced by encodeForumMessage(). Returns false (leaving `out`
-// untouched) when the bytes are not a well-formed forum message — malformed
-// JSON, an unknown `type`, or a missing required field (topics need a `title`,
-// replies need a `topicId`) — so non-forum traffic on the channel is ignored.
-bool decodeForumMessage(const QByteArray &bytes, ForumMessage &out);

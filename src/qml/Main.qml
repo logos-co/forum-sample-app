@@ -609,7 +609,7 @@ Item {
             color: Theme.palette.text
         }
         LogosText {
-            text: "Topic: " + (root.topic.length > 0 ? root.topic : "—")
+            text: "Topics: " + (root.topic.length > 0 ? root.topic : "—")
             color: Theme.palette.textSecondary
             font.pixelSize: Theme.typography.secondaryText
             font.family: root.monoFont
@@ -937,7 +937,7 @@ Item {
                     LogosTextField {
                         id: replyField
                         Layout.fillWidth: true
-                        placeholderText: root.nodeReady ? "Write a reply…" : "Waiting for node…"
+                        placeholderText: root.nodeReady ? "Write a reply…" : "Preparing local store…"
                         enabled: root.nodeReady
                         Component.onCompleted: textInput.activeFocusOnTab = true
                     }
