@@ -969,7 +969,8 @@ bool ExampleForumBackend::openEngine() {
 
   logEvent("local store open at " + dir.toStdString() +
            ", peer " + peerId.toStdString());
-  replayPersisted();
+  // Nothing is pushed to the view here: its replica does not exist yet. The
+  // view pulls the backlog itself via loadBacklog() once it is ready.
 
   // Composing runs off the local store, not the network: put() is durable and
   // queued for broadcast whether or not a node ever comes up. Gating this on a
@@ -980,21 +981,25 @@ bool ExampleForumBackend::openEngine() {
   return true;
 }
 
-void ExampleForumBackend::replayPersisted() {
-  // Topics before replies, so a reply never has to stand up a placeholder for
-  // a topic that is about to be replayed two rows later.
+QString ExampleForumBackend::loadBacklog() {
+  if (!m_engine)
+    return QStringLiteral("[]");
+
+  QJsonArray backlog;
+  // Topics before replies, so the view never has to stand up a placeholder for
+  // a topic that is a few entries further down the same array.
   for (const char *collection : {kTopicsCollection, kRepliesCollection}) {
     const cloud_data_core::EngineResult r = m_engine->query(collection, "{}");
     if (!r.success) {
-      logEvent(std::string("replay of ") + collection + " failed: " + r.error);
+      logEvent(std::string("backlog query of ") + collection + " failed: " + r.error);
       continue;
     }
     if (!r.value.is_array())
       continue;
 
     // SQLite hands rows back in no particular order, so sort by the post's own
-    // timestamp before replaying — otherwise a restart would shuffle every
-    // thread into storage order.
+    // timestamp — otherwise a restart would shuffle every thread into storage
+    // order.
     std::vector<std::pair<qint64, const nlohmann::json *>> rows;
     for (const auto &row : r.value) {
       if (!row.is_object() || !row.contains("docId") || !row["docId"].is_string())
@@ -1007,13 +1012,41 @@ void ExampleForumBackend::replayPersisted() {
     std::stable_sort(rows.begin(), rows.end(),
                      [](const auto &a, const auto &b) { return a.first < b.first; });
 
+    const bool isTopics = collection == std::string(kTopicsCollection);
     for (const auto &[ts, row] : rows) {
-      (void)ts;
-      handleDocumentChanged(collection, (*row)["docId"].get<std::string>(), row->dump());
+      const QJsonDocument doc =
+          QJsonDocument::fromJson(QByteArray::fromStdString(row->dump()));
+      if (!doc.isObject())
+        continue;
+      const QJsonObject obj = doc.object();
+      if (obj.value(QStringLiteral("$deleted")).toBool())
+        continue;
+
+      QJsonObject entry{
+          {"kind", isTopics ? QStringLiteral("topic") : QStringLiteral("reply")},
+          {"id", obj.value(QStringLiteral("docId")).toString()},
+          {"body", obj.value(QStringLiteral("body")).toString()},
+          {"author", obj.value(QStringLiteral("author")).toString()},
+          {"ts", QString::number(ts)},
+      };
+      if (isTopics) {
+        const QString title = obj.value(QStringLiteral("title")).toString();
+        if (title.isEmpty())
+          continue; // a topic must have a title
+        entry.insert(QStringLiteral("title"), title);
+      } else {
+        const QString topicId = obj.value(QStringLiteral("topicId")).toString();
+        if (topicId.isEmpty())
+          continue; // a reply must reference its topic
+        entry.insert(QStringLiteral("topicId"), topicId);
+      }
+      backlog.append(entry);
     }
-    logEvent("replayed " + std::to_string(rows.size()) + " persisted " +
-             collection);
   }
+
+  logEvent("backlog: " + std::to_string(backlog.size()) + " persisted post(s)");
+  return QString::fromUtf8(
+      QJsonDocument(backlog).toJson(QJsonDocument::Compact));
 }
 
 void ExampleForumBackend::handleDocumentChanged(const std::string &collectionId,

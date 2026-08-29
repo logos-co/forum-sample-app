@@ -32,9 +32,10 @@
  *     replayed from disk at startup — arrives on one path
  *     (`handleDocumentChanged`) and fans out to the `topicReceived` /
  *     `replyReceived` signals the QML view threads into a forum.
- *   - on startup `replayPersisted()` queries both collections and replays
- *     everything the store already holds, which is what makes the forum
- *     survive open/close.
+ *   - `loadBacklog()` hands the view everything the store already holds, which
+ *     is what makes the forum survive open/close. The view pulls it once its
+ *     replica is up, because a signal emitted during bootstrap would reach no
+ *     replica at all (see the .rep).
  *
  * The engine is what persists; `storage_module` only backs its optional
  * snapshot bridge, which stays inert unless the user has a storage node up.
@@ -75,6 +76,11 @@ public:
   // Locally restore a placeholder topic from its (hash-verified) title. See the
   // .rep contract. Returns "" on success, or an error description.
   QString reconstructTopic(QString topicId, QString title) override;
+
+  // Every post the local store already holds, as the JSON array documented in
+  // the .rep. Pulled by the view once its replica is up — see the .rep's
+  // doc comment for why this is a slot and not a burst of startup signals.
+  QString loadBacklog() override;
 
   // .rep SLOTs — account management. Each returns "" on success or an error
   // description, and routes every state change through publishAccountState()
@@ -194,11 +200,6 @@ private:
   // it already holds. Returns false if the store could not be opened, in which
   // case composing stays disabled. Called once from bootstrap().
   bool openEngine();
-
-  // Replay every document already in the local store through the view's
-  // signals. This is what makes the forum survive open/close; runs before the
-  // node is up, so the UI populates without waiting on the network.
-  void replayPersisted();
 
   // The engine's single report of a materialized document change, whatever
   // caused it (local put, merged remote op, or startup replay). Decodes the

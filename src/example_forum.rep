@@ -7,6 +7,19 @@ class ExampleForum
     // Reply to an existing topic (by its id). Returns "" on success.
     SLOT(QString replyToTopic(QString topicId, QString body))
 
+    // Every post already in the local store, as a JSON array ordered topics
+    // first and oldest first within each kind:
+    //   [{"kind":"topic","id":…,"title":…,"body":…,"author":…,"ts":…}, …]
+    //
+    // A SLOT rather than a startup SIGNAL on purpose. The backend finishes its
+    // bootstrap long before this view's replica has connected, and QtRO
+    // forwards a signal only to replicas attached at the moment it is emitted
+    // — there is no replay for a late joiner. Signals are therefore only safe
+    // for changes *after* the view is up; the backlog has to be pulled by the
+    // view once it is ready. (`accountsJson` solves the same problem the other
+    // way, as a PROP, since a replica does receive property state on connect.)
+    SLOT(QString loadBacklog())
+
     // Locally restore a topic known only through its replies, by supplying its
     // title (shared out-of-band). Since the topic id is a hash of the title,
     // this succeeds only when the title hashes to `topicId`; on success it emits
